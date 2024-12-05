@@ -319,7 +319,7 @@ if __name__ == "__main__":
     bsize = 64
 
     # use SAHI
-    use_sahi = False
+    use_sahi = True
 
 
     # Get the root data directory (Data); OCD
@@ -335,14 +335,14 @@ if __name__ == "__main__":
     # Extracted frames from Converted videos go here
     # input_dir = os.path.join(rdir,"images_resize_05_png")
     # input_dir = os.path.join(rdir,"images_resize_03")
-    input_dir = f'{rdir}/images_resize_03'
+    input_dir = f'{rdir}/images_resize_05'
     os.makedirs(input_dir, exist_ok=True)
     print('\nInput directory = {}'.format(input_dir))
 
     # Frames are batched (RAM) and temporarily placed here
     # batched_dir = os.path.join(rdir,"images_resize_05_png_b"+str(bsize))
     # batched_dir = os.path.join(rdir,"images_resize_03_b"+str(bsize))
-    batched_dir = f'{rdir}/images_resize_03_b{str(bsize)}'
+    batched_dir = f'{rdir}/images_resize_05_b{str(bsize)}'
 
     # If it exists from last time (exited early) delete
     if os.path.exists(batched_dir):
@@ -353,7 +353,10 @@ if __name__ == "__main__":
 
     # Auto labeled data; this is also temporary until being filtered
     # auto_labeled_dir = os.path.join(rdir,"Auto_Labeled")
-    auto_labeled_dir = f'{rdir}/Auto_Labeled'
+    auto_labeled_dir = f'{rdir}/Auto_Labeled_05_sahi'
+    if os.path.isdir(auto_labeled_dir):
+        print('\n{} found. Deleting existing directory.'.format(auto_labeled_dir))
+        shutil.rmtree(auto_labeled_dir, ignore_errors=True)
     os.makedirs(auto_labeled_dir, exist_ok=True)
 
     # The root folder containing *all* post-processed dataset for training
@@ -366,7 +369,7 @@ if __name__ == "__main__":
 
     # Currently we're creating single-class datasets, and
     # merging them together right before training the model
-    dataset_name = "RockFinder_03_png"
+    dataset_name = "RockFinder_05_sahi_png"
 
     # The directory for the current dataset being created
     # current_data_dir = os.path.join(training_data_dir, dataset_name)
@@ -417,7 +420,8 @@ if __name__ == "__main__":
             dataset = base_model.label(input_folder=temporary_image_folder,
                                        extension=".png",
                                        output_folder=auto_labeled_dir,
-                                       record_confidence=True)
+                                       record_confidence=False,
+                                       sahi=use_sahi)
             print(len(list(dataset.images.keys())))
             # Delete the temporary copies
             # shutil.rmtree(temporary_image_folder)
@@ -425,6 +429,7 @@ if __name__ == "__main__":
             # Filter the dataset
             image_names = list(dataset.images.keys())
             print(len(image_names))
+
             for image_name in tqdm(image_names):
                 # numpy arrays for this image
                 image = dataset.images[image_name]

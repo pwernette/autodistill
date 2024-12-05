@@ -1,13 +1,15 @@
-import os.path
+import os
 import argparse
+from PIL import Image
 from tqdm import tqdm
 
 import numpy as np
 
 import supervision as sv
+from supervision.detection.utils import *
 from ultralytics import YOLO
 
-from Auto_Distill import filter_detections
+from pw_Auto_Distill import filter_detections
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -15,7 +17,7 @@ from Auto_Distill import filter_detections
 # ----------------------------------------------------------------------------------------------------------------------
 
 
-def process_video(source_weights, source_video, output_dir, task, start_at, end_at, conf=.3, iou=.7):
+def process_dir(model_dir, input_dir, output_dir, task, owrite=False, model_weights_type='best', img_size=None, conf=0.3, iou=0.7):
     """
 
     :param source_weights:
@@ -30,12 +32,14 @@ def process_video(source_weights, source_video, output_dir, task, start_at, end_
     """
 
     # Create the target path
-    target_video_path = f"{output_dir}/{os.path.basename(source_video)}"
+    # target_path = f"{output_dir}/{os.path.basname(model_dir)}"
+    target_path = os.path.join(output_dir, os.path.basname(model_dir))
     # Create the target directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
 
+    assert os.path.exists(os.path.join(model_dir, 'weights', model_weights_type+'.pt'))
     # Load the model
-    model = YOLO(source_weights)
+    model = YOLO(os.path.join(model_dir, 'weights', model_weights_type+'.pt'))
 
     if task == 'detect':
         # Load the tracker
@@ -44,151 +48,127 @@ def process_video(source_weights, source_video, output_dir, task, start_at, end_
         box_annotator = sv.BoundingBoxAnnotator()
         # Adds label to annotation (tracking)
         labeler = sv.LabelAnnotator()
-
     elif args.task == 'segment':
         # Create the annotators for segmentation
         mask_annotator = sv.MaskAnnotator()
         box_annotator = sv.BoundingBoxAnnotator()
-
     else:
         raise Exception("ERROR: Specify --task [detect, segment]")
-
-    # Create the video generators
-    frame_generator = sv.get_video_frames_generator(source_path=source_video)
-    video_info = sv.VideoInfo.from_video_path(video_path=source_video)
-
-    # Where to start and end inference
-    if start_at <= 0:
-        start_at = 0
-    if end_at <= -1:
-        end_at = video_info.total_frames
-
-    # Frame count
-    f_idx = 0
-
+    
     # Area threshold
     area_thresh = 1.1
 
-    # Image size
-    imgsz = [1088, 1280]
+    imgs = sv.list_files_with_extensions(directory=input_dir, extensions=["png", "jpg", "jpeg"])
+    
+    # get image dimensions
+    if img_size is None:
+        img_size = Image.open(imgs[0]).size
+    print('Using images with size: {}'.format(img_size))
 
-    # Loop through all the frames
-    with sv.VideoSink(target_path=target_video_path, video_info=video_info) as sink:
-        for frame in tqdm(frame_generator, total=video_info.total_frames):
+    with sv.ImageSink(target_dir_path=output_dir, overwrite=owrite) as sink:
+        # Loop through all the images
+        for img in tqdm(imgs, total=len(imgs)):
+            # Run the frame through the model and make predictions
+            result = model(img,
+                            conf=conf,
+                            iou=iou,
+                            imgsz=img_size,
+                            half=True,
+                            augment=True,
+                            max_det=1000,
+                            verbose=False,
+                            show=True)[0]
 
-            # Only make predictions within range
-            if start_at < f_idx < end_at:
+            # Version issues
+            result.obb = None
 
-                # Run the frame through the model and make predictions
-                result = model(frame,
-                               conf=conf,
-                               iou=iou,
-                               imgsz=imgsz,
-                               half=True,
-                               augment=True,
-                               max_det=1000,
-                               verbose=False,
-                               show=True)[0]
+            # Convert the results
+            detections = sv.Detections.from_ultralytics(result)
 
-                # Version issues
-                result.obb = None
+            # Filter the detections
+            detections = filter_detections(img, detections, area_thresh)
 
-                # Convert the results
-                detections = sv.Detections.from_ultralytics(result)
+            if task == 'detect':
+                # Track the detections
+                detections = tracker.update_with_detections(detections)
+                labels = [f"#{tracker_id}" for tracker_id in detections.tracker_id]
 
-                # Filter the detections
-                detections = filter_detections(frame, detections, area_thresh)
-
-                if task == 'detect':
-                    # Track the detections
-                    detections = tracker.update_with_detections(detections)
-                    labels = [f"#{tracker_id}" for tracker_id in detections.tracker_id]
-
-                    # Create an annotated version of the frame (boxes)
-                    annotated_frame = box_annotator.annotate(scene=frame.copy(), detections=detections)
-                    annotated_frame = labeler.annotate(scene=annotated_frame, detections=detections, labels=labels)
-
-                else:
-                    # Create an annotated version of the frame (masks and boxes)
-                    annotated_frame = mask_annotator.annotate(scene=frame.copy(), detections=detections)
-                    annotated_frame = box_annotator.annotate(scene=annotated_frame.copy(), detections=detections)
-
-                # Write the frame to the video
-                sink.write_frame(frame=annotated_frame)
+                # Create an annotated version of the frame (boxes)
+                annotated_img = box_annotator.annotate(scene=img.copy(), detections=detections)
+                annotated_img = labeler.annotate(scene=annotated_img, detections=detections, labels=labels)
 
             else:
-                # Write the original frame, without detections
-                sink.write_frame(frame)
+                # Create an annotated version of the frame (masks and boxes)
+                annotated_img = mask_annotator.annotate(scene=img.copy(), detections=detections)
+                annotated_img = box_annotator.annotate(scene=annotated_img.copy(), detections=detections)
 
-            # Increase frame count
-            f_idx += 1
+            # Write the frame to the video
+            sink.save_image(image=annotated_img, image_name=os.path.basename(img))
 
 
 # ----------------------------------------------------------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------------------------------------------------------
-
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="Video Processing with YOLO and ByteTrack")
 
-    parser.add_argument(
-        "--source_weights",
-        required=True,
-        help="Path to the source weights file",
-        type=str,
-    )
-    parser.add_argument(
-        "--source_video",
-        required=True,
-        help="Path to the source video file",
-        type=str,
-    )
-    parser.add_argument(
-        "--output_dir",
-        required=True,
-        help="Path to the target video directory (output)",
-        type=str,
-    )
-    parser.add_argument(
-        "--task",
-        required=True,
-        help="Task to perform [detect, segment], if applicable",
-        type=str,
-    )
-    parser.add_argument(
-        "--start_at",
-        default=0,
-        help="Frame to start inference",
-        type=int,
-    )
-    parser.add_argument(
-        "--end_at",
-        default=-1,
-        help="Frame to end inference",
-        type=int,
-    )
-    parser.add_argument(
-        "--conf",
-        default=0.15,
-        help="Confidence threshold for the model",
-        type=float,
-    )
-    parser.add_argument(
-        "--iou",
-        default=0.3,
-        help="IOU threshold for the model",
-        type=float
-    )
+    parser.add_argument('-m','-input_model','-inmodel','-model','-trained_model','-mod',
+                        dest='input_model',
+                        type=str,
+                        required=True,
+                        help="Path to the source weights file"
+                        )
+    parser.add_argument('-wt','-weights','-weightstype',
+                        dest='weights_type',
+                        type=str,
+                        choices=['best','last'],
+                        default='best',
+                        help="Source weights option [choices: best, last]"
+                        )
+    parser.add_argument('-i','-input_dir','-indir','-idir','-inputdir','-in',
+                        dest='input_directory',
+                        type=str,
+                        required=True,
+                        help="Path to the directory of images (input)"
+                        )
+    parser.add_argument('-o','-output_dir','-outdir','-odir','-outputdir','-out',
+                        dest='output_directory',
+                        type=str,
+                        required=True,
+                        help="Path to the target video directory (output)"
+                        )
+    parser.add_argument('-t','-task',
+                        dest='task',
+                        type=str,
+                        choices=['detect','segment'],
+                        default='segment',
+                        required=True,
+                        help="Task to perform [choices: detect, segment]"
+                        )
+    parser.add_argument('-c','-conf','-confidence',
+                        dest='confidence',
+                        type=float,
+                        default=0.15,
+                        help="Confidence threshold for the model"
+                        )
+    parser.add_argument('-iou',
+                        dest='iou',
+                        type=float,
+                        default=0.3,
+                        help="IOU threshold for the model"
+                        )
 
     args = parser.parse_args()
 
-    process_video(
-        source_weights=args.source_weights,
-        source_video=args.source_video,
-        output_dir=args.output_dir,
-        task=args.task,
-        start_at=args.start_at,
-        end_at=args.end_at,
-        conf=args.conf,
-        iou=args.iou,
-    )
+    process_dir(model_dir=args.input_model, 
+                input_dir=args.input_directory, 
+                output_dir=args.output_directory, 
+                task=args.task, 
+                owrite=False, 
+                model_weights_type=args.task, 
+                img_size=None, 
+                conf=args.confidence, 
+                iou=args.iou)
+
+if __name__ == "__main__":
+    main()
