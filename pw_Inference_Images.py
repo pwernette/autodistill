@@ -33,10 +33,10 @@ def process_dir(model_dir, input_dir, output_dir, task, owrite=False, model_weig
 
     # Create the target path
     # target_path = f"{output_dir}/{os.path.basname(model_dir)}"
-    target_path = os.path.join(output_dir, os.path.basname(model_dir))
+    target_path = os.path.join(output_dir, os.path.basename(model_dir))
     # Create the target directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
-
+    print(os.path.join(model_dir, 'weights', model_weights_type+'.pt'))
     assert os.path.exists(os.path.join(model_dir, 'weights', model_weights_type+'.pt'))
     # Load the model
     model = YOLO(os.path.join(model_dir, 'weights', model_weights_type+'.pt'))
@@ -48,7 +48,7 @@ def process_dir(model_dir, input_dir, output_dir, task, owrite=False, model_weig
         box_annotator = sv.BoundingBoxAnnotator()
         # Adds label to annotation (tracking)
         labeler = sv.LabelAnnotator()
-    elif args.task == 'segment':
+    elif task == 'segment':
         # Create the annotators for segmentation
         mask_annotator = sv.MaskAnnotator()
         box_annotator = sv.BoundingBoxAnnotator()
@@ -65,19 +65,20 @@ def process_dir(model_dir, input_dir, output_dir, task, owrite=False, model_weig
         img_size = Image.open(imgs[0]).size
     print('Using images with size: {}'.format(img_size))
 
-    with sv.ImageSink(target_dir_path=output_dir, overwrite=owrite) as sink:
-        # Loop through all the images
-        for img in tqdm(imgs, total=len(imgs)):
+    # with sv.ImageSink(target_dir_path=output_dir, overwrite=owrite) as sink:
+    # Loop through all the images
+    for img in tqdm(imgs, total=len(imgs)):
+        with Image.open(img) as imag:
             # Run the frame through the model and make predictions
-            result = model(img,
+            result = model(imag,
                             conf=conf,
                             iou=iou,
                             imgsz=img_size,
                             half=True,
-                            augment=True,
+                            augment=False,
                             max_det=1000,
                             verbose=False,
-                            show=True)[0]
+                            show=False)[0]
 
             # Version issues
             result.obb = None
@@ -94,16 +95,16 @@ def process_dir(model_dir, input_dir, output_dir, task, owrite=False, model_weig
                 labels = [f"#{tracker_id}" for tracker_id in detections.tracker_id]
 
                 # Create an annotated version of the frame (boxes)
-                annotated_img = box_annotator.annotate(scene=img.copy(), detections=detections)
+                annotated_img = box_annotator.annotate(scene=imag.copy(), detections=detections)
                 annotated_img = labeler.annotate(scene=annotated_img, detections=detections, labels=labels)
-
             else:
                 # Create an annotated version of the frame (masks and boxes)
-                annotated_img = mask_annotator.annotate(scene=img.copy(), detections=detections)
-                annotated_img = box_annotator.annotate(scene=annotated_img.copy(), detections=detections)
+                # annotated_img = mask_annotator.annotate(scene=imag.copy(), detections=detections)
+                annotated_img = box_annotator.annotate(scene=imag.copy(), detections=detections)
 
-            # Write the frame to the video
-            sink.save_image(image=annotated_img, image_name=os.path.basename(img))
+        # Write the frame to the video
+        # sink.save_image(image=np.array(annotated_img), image_name=os.path.basename(img))
+        annotated_img.save(os.path.join(output_dir,os.path.basename(img)))
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -142,7 +143,6 @@ def main():
                         type=str,
                         choices=['detect','segment'],
                         default='segment',
-                        required=True,
                         help="Task to perform [choices: detect, segment]"
                         )
     parser.add_argument('-c','-conf','-confidence',
@@ -165,7 +165,7 @@ def main():
                 output_dir=args.output_directory, 
                 task=args.task, 
                 owrite=False, 
-                model_weights_type=args.task, 
+                model_weights_type=args.weights_type, 
                 img_size=None, 
                 conf=args.confidence, 
                 iou=args.iou)

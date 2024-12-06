@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
+from PIL import Image
 
 import supervision as sv
 from supervision.detection.utils import *
@@ -167,7 +168,7 @@ def filter_detections(image, annotations, area_thresh, conf_thresh=0.0):
     :return annotations:
     """
 
-    height, width, channels = image.shape
+    height, width = Image.open(image).size
     image_area = height * width
 
     # Filter by area
