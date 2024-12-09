@@ -17,6 +17,39 @@ from autodistill_grounded_sam import GroundedSAM
 from autodistill_grounding_dino import GroundingDINO
 
 
+
+def str_to_bool(s):
+    """
+    Converts str ['t','true','f','false'] to boolean, not case sensitive.
+    Checks first if already a boolean.
+    Raises exception if unexpected entry.
+        args:
+            s: str
+        returns:
+            out_boolean: output boolean [True or False]
+    """
+    #check to see if already boolean
+    if isinstance(s, bool):
+        out_boolean = s
+    else:
+        # remove quotes, commas, and case from s
+        sf = s.lower().replace('"', '').replace("'", '').replace(',', '')
+        # True
+        if sf in ['t', 'true']:
+            out_boolean = True
+        # False
+        elif sf in ['f', 'false']:
+            out_boolean = False
+        # Unexpected arg
+        else:
+            # print exception so it will be visible in console, then raise exception
+            print('ArgumentError: Argument invalid. Expected boolean '
+                  + 'got ' + '"' + str(s) + '"' + ' instead')
+            raise Exception('ArgumentError: Argument invalid. Expected boolean '
+                            + 'got ' + '"' + str(s) + '"' + ' instead')
+    return out_boolean
+
+
 # ----------------------------------------------------------------------------------------------------------------------
 # Functions
 # ----------------------------------------------------------------------------------------------------------------------

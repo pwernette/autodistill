@@ -8,8 +8,9 @@ import numpy as np
 import supervision as sv
 from supervision.detection.utils import *
 from ultralytics import YOLO
+# from autodistill_yolov8 import YOLOv8
 
-from pw_Auto_Distill import filter_detections
+from pw_Auto_Distill import filter_detections, str_to_bool
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -45,13 +46,13 @@ def process_dir(model_dir, input_dir, output_dir, task, owrite=False, model_weig
         # Load the tracker
         tracker = sv.ByteTrack()
         # Create the annotator for detection
-        box_annotator = sv.BoundingBoxAnnotator()
+        box_annotator = sv.BoxAnnotator()
         # Adds label to annotation (tracking)
         labeler = sv.LabelAnnotator()
     elif task == 'segment':
         # Create the annotators for segmentation
         mask_annotator = sv.MaskAnnotator()
-        box_annotator = sv.BoundingBoxAnnotator()
+        box_annotator = sv.BoxAnnotator()
     else:
         raise Exception("ERROR: Specify --task [detect, segment]")
     
@@ -61,9 +62,9 @@ def process_dir(model_dir, input_dir, output_dir, task, owrite=False, model_weig
     imgs = sv.list_files_with_extensions(directory=input_dir, extensions=["png", "jpg", "jpeg"])
     
     # get image dimensions
-    if img_size is None:
-        img_size = Image.open(imgs[0]).size
-    print('Using images with size: {}'.format(img_size))
+    # if img_size is None:
+    #     img_size = Image.open(imgs[0]).size
+    # print('Using images with size: {}'.format(img_size))
 
     # with sv.ImageSink(target_dir_path=output_dir, overwrite=owrite) as sink:
     # Loop through all the images
@@ -73,7 +74,7 @@ def process_dir(model_dir, input_dir, output_dir, task, owrite=False, model_weig
             result = model(imag,
                             conf=conf,
                             iou=iou,
-                            imgsz=img_size,
+                            # imgsz=img_size,
                             half=True,
                             augment=False,
                             max_det=1000,
@@ -99,11 +100,10 @@ def process_dir(model_dir, input_dir, output_dir, task, owrite=False, model_weig
                 annotated_img = labeler.annotate(scene=annotated_img, detections=detections, labels=labels)
             else:
                 # Create an annotated version of the frame (masks and boxes)
-                # annotated_img = mask_annotator.annotate(scene=imag.copy(), detections=detections)
-                annotated_img = box_annotator.annotate(scene=imag.copy(), detections=detections)
+                annotated_img = mask_annotator.annotate(scene=imag.copy(), detections=detections)
+                annotated_img = box_annotator.annotate(scene=annotated_img, detections=detections)
 
-        # Write the frame to the video
-        # sink.save_image(image=np.array(annotated_img), image_name=os.path.basename(img))
+        # save the annotated image
         annotated_img.save(os.path.join(output_dir,os.path.basename(img)))
 
 
@@ -157,14 +157,22 @@ def main():
                         default=0.3,
                         help="IOU threshold for the model"
                         )
+    parser.add_argument('-owrite','-overwrite','-overwrite_output',
+                        dest='overwrite_output',
+                        type=str,choices=['t','T','true','True','f','F','false','False'],
+                        default='false',
+                        help="Overwrite outputs [default = False]"
+                        )
 
     args = parser.parse_args()
+
+    args.overwrite_output = str_to_bool(args.overwrite_output)
 
     process_dir(model_dir=args.input_model, 
                 input_dir=args.input_directory, 
                 output_dir=args.output_directory, 
                 task=args.task, 
-                owrite=False, 
+                owrite=args.overwrite_output, 
                 model_weights_type=args.weights_type, 
                 img_size=None, 
                 conf=args.confidence, 
