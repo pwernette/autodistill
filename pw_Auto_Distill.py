@@ -201,7 +201,9 @@ def filter_detections(image, annotations, area_thresh, conf_thresh=0.0):
     :return annotations:
     """
 
-    height, width = Image.open(image).size
+    # height, width = Image.open(image).size
+    print(image.shape)
+    height,width,_ = image.shape
     image_area = height * width
 
     # Filter by area
@@ -323,28 +325,46 @@ if __name__ == "__main__":
     SAVE_LABELS = True
 
     # CV Tasks
-    DETECTION = False
-    SEGMENTATION = True
+    DETECTION = True
+    SEGMENTATION = False
 
     # There can only be one
     assert DETECTION != SEGMENTATION
 
     # Set up the labeling ontology
+    # ontology = CaptionOntology({
+    #     "rock": "rock",
+    #     "tiny rock": "rock",
+    #     "small rock": "rock",
+    #     "big rock": "rock",
+    #     "fuzzy rock": "rock",
+    #     "smooth rock": "rock",
+    # })
+    # ontology = CaptionOntology({
+    #     "mussel": "mussel",
+    #     "mussel": "clam",
+    #     "mussel": "oyster"
+    # })
+    # ontology = CaptionOntology({
+    #     "shell": "shell",
+    #     "shell hash": "shell hash",
+    # })
     ontology = CaptionOntology({
-        "rock": "rock",
-        "tiny rock": "rock",
-        "small rock": "rock",
-        "big rock": "rock",
-        "fuzzy rock": "rock",
-        "smooth rock": "rock",
+        "fish": "fish",
+        "big fish": "fish",
+        "small fish": "fish",
+        "tiny fish": "fish",
+        "fuzzy fish": "fish",
     })
 
     # Polygon's size as a ratio of the image
     # Large polygons shouldn't be included...
-    area_thresh = 0.4
+    # area_thresh = 0.4
+    area_thresh = 0.01
 
     # Non-maximum suppression threshold
-    nms_thresh = 0.1
+    # nms_thresh = 0.1
+    nms_thresh = 0.6
 
     # Extract every N frames
     frame_stride = 15
@@ -359,8 +379,12 @@ if __name__ == "__main__":
     # Get the root data directory (Data); OCD
     # rdir = os.path.dirname("B:/RockFinder/images")
     # root = root.replace("\\", "/")
-    rdir = "B:/RockFinder/images"
+    # rdir = "B:/RockFinder/images"
+    rdir = "G:/sfm_agu/images_a/raw_dup"
     print('\nRoot dir = {}'.format(rdir))
+
+    # model_name_base = 'RockFinder'
+    model_name_base = 'FishFinder'
 
     # Converted videos from TATOR get placed here
     # converted_video_dir = f"{root}/Converted_Videos"
@@ -387,7 +411,10 @@ if __name__ == "__main__":
 
     # Auto labeled data; this is also temporary until being filtered
     # auto_labeled_dir = os.path.join(rdir,"Auto_Labeled")
-    auto_labeled_dir = f'{rdir}/Auto_Labeled_05_sahi'
+    if use_sahi:
+        auto_labeled_dir = f'{rdir}/{model_name_base}_Auto_Labeled_05_sahi'
+    else:
+        auto_labeled_dir = f'{rdir}/{model_name_base}_Auto_Labeled_05'
     if os.path.isdir(auto_labeled_dir):
         print('\n{} found. Deleting existing directory.'.format(auto_labeled_dir))
         shutil.rmtree(auto_labeled_dir, ignore_errors=True)
@@ -403,7 +430,10 @@ if __name__ == "__main__":
 
     # Currently we're creating single-class datasets, and
     # merging them together right before training the model
-    dataset_name = "RockFinder_05_sahi_png"
+    if use_sahi:
+        dataset_name = model_name_base+"_05_sahi_png"
+    else:
+        dataset_name = model_name_base+"_05_png"
 
     # The directory for the current dataset being created
     # current_data_dir = os.path.join(training_data_dir, dataset_name)
