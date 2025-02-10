@@ -349,12 +349,21 @@ if __name__ == "__main__":
     #     "shell": "shell",
     #     "shell hash": "shell hash",
     # })
+    # ontology = CaptionOntology({
+    #     "fish": "fish",
+    #     "big fish": "fish",
+    #     "small fish": "fish",
+    #     "tiny fish": "fish",
+    #     "fuzzy fish": "fish",
+    # })
+
     ontology = CaptionOntology({
-        "fish": "fish",
-        "big fish": "fish",
-        "small fish": "fish",
-        "tiny fish": "fish",
-        "fuzzy fish": "fish",
+        "tree": "tree",
+        "car": "car",
+        "telephone pole": "pole",
+        "pole":"pole",
+        "deer":"deer",
+        "person":"person",
     })
 
     # Polygon's size as a ratio of the image
@@ -380,11 +389,13 @@ if __name__ == "__main__":
     # rdir = os.path.dirname("B:/RockFinder/images")
     # root = root.replace("\\", "/")
     # rdir = "B:/RockFinder/images"
-    rdir = "G:/sfm_agu/images_a/raw_dup"
+    # rdir = "G:/sfm_agu/images_a/raw_dup"
+    rdir = "D:/sfm_deer/rgb_e85s70"
     print('\nRoot dir = {}'.format(rdir))
 
     # model_name_base = 'RockFinder'
-    model_name_base = 'FishFinder'
+    # model_name_base = 'FishFinder'
+    model_name_base = 'DeerMapper'
 
     # Converted videos from TATOR get placed here
     # converted_video_dir = f"{root}/Converted_Videos"
@@ -393,14 +404,16 @@ if __name__ == "__main__":
     # Extracted frames from Converted videos go here
     # input_dir = os.path.join(rdir,"images_resize_05_png")
     # input_dir = os.path.join(rdir,"images_resize_03")
-    input_dir = f'{rdir}/images_resize_05'
+    # input_dir = f'{rdir}/images_resize_05'
+    input_dir = rdir
     os.makedirs(input_dir, exist_ok=True)
     print('\nInput directory = {}'.format(input_dir))
 
     # Frames are batched (RAM) and temporarily placed here
     # batched_dir = os.path.join(rdir,"images_resize_05_png_b"+str(bsize))
     # batched_dir = os.path.join(rdir,"images_resize_03_b"+str(bsize))
-    batched_dir = f'{rdir}/images_resize_05_b{str(bsize)}'
+    # batched_dir = f'{rdir}/images_resize_05_b{str(bsize)}'
+    batched_dir = f'{rdir}/images_b{str(bsize)}'
 
     # If it exists from last time (exited early) delete
     if os.path.exists(batched_dir):
