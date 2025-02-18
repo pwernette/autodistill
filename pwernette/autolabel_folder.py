@@ -22,14 +22,21 @@ ont_waves = CaptionOntology({
     "white water":"wave",
     "breaking wave":"wave"
 })
+ont_grapes = CaptionOntology({
+    "grape": "grape",
+    "grapes": "grapes",
+    "grape cluster": "grapes",
+})
 
 
 ''' Update these parameters '''
-use_ontology = ont_person
+use_ontology = ont_grapes
 base_model_type = 'sam'
-folder_to_label = '/mnt/c/Users/werne/OneDrive/Documents/coastal_cameras/test_images - Copy'
-folder_to_place = '/mnt/c/Users/werne/OneDrive/Documents/coastal_cameras/test_images - outputs'
-image_extension = '.jpg'
+# folder_to_label = '/mnt/c/Users/werne/OneDrive/Documents/coastal_cameras/test_images - Copy'
+# folder_to_place = '/mnt/c/Users/werne/OneDrive/Documents/coastal_cameras/test_images - outputs'
+folder_to_label = '/mnt/d/greeen/autodist_orig'
+folder_to_place = '/mnt/d/greeen/autodist_out'
+image_extension = '.JPG'
 ''' end update parameters '''
 
 

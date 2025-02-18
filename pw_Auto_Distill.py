@@ -12,9 +12,9 @@ from PIL import Image
 import supervision as sv
 from supervision.detection.utils import *
 from autodistill import helpers
-from autodistill.detection import CaptionOntology
 from autodistill_grounded_sam import GroundedSAM
 from autodistill_grounding_dino import GroundingDINO
+from autodistill.detection import CaptionOntology
 
 
 
@@ -89,7 +89,7 @@ def extract_frames_from_video(video_path, image_dir, start_ratio=.15, end_ratio=
     """
     # Create a name pattern
     video_name = os.path.splitext(os.path.basename(video_path))[0]
-    image_name_pattern = video_name + "-{:05d}.png"
+    image_name_pattern = video_name + "-{:05d}."+file_ext
 
     # Get the video feed
     cap = cv2.VideoCapture(video_path)
@@ -158,7 +158,7 @@ def batch_and_copy_images(source_folder, output_folder, batch_size=64):
         return
 
     # Create a list of image files in the source folder
-    image_files = glob.glob(os.path.join(source_folder, '*.png')) + glob.glob(os.path.join(source_folder, '*.jpg'))
+    image_files = glob.glob(os.path.join(source_folder, '*.'+file_ext))
 
     # Check if there are any image files
     if not image_files:
@@ -225,18 +225,19 @@ def render_dataset(dataset, output_dir, include_boxes=True, include_masks=False)
     :return:
     """
     # Images
-    image_names = list(dataset.images.keys())
+    # image_names = list(dataset.images.keys())
 
     # Create the annotation object
     mask_annotator = sv.MaskAnnotator()
     box_annotator = sv.BoundingBoxAnnotator()
 
     with sv.ImageSink(target_dir_path=output_dir, overwrite=False) as sink:
-        for i_idx, image_name in enumerate(image_names):
+        for path, image, annotations in dataset:
+        # for i_idx, image_name in enumerate(image_names):
 
             # Get the images and annotation
-            image = dataset.images[image_name]
-            annotations = dataset.annotations[image_name]
+            # image = dataset.images[image_name]
+            # annotations = dataset.annotations[image_name]
 
             if include_boxes:
                 # Get the boxes for the annotations
@@ -246,11 +247,12 @@ def render_dataset(dataset, output_dir, include_boxes=True, include_masks=False)
                 # Get the masks for the annotations
                 image = mask_annotator.annotate(scene=image, detections=annotations)
 
-            output_file = os.path.basename(image_name)
+            # output_file = os.path.basename(image_name)
+            output_file = os.path.basename(path)
             sink.save_image(image=image, image_name=output_file)
 
 
-def remove_bad_data(data_dir, fileext='png'):
+def remove_bad_data(data_dir, fileext):
     """
 
     :param data_dir:
@@ -291,7 +293,7 @@ def remove_bad_data(data_dir, fileext='png'):
         }
 
     # Get the rendered images
-    render_images = glob.glob(f"{render_dir}/*.png")
+    render_images = glob.glob(f"{render_dir}/*."+fileext)
 
     # Loop through the rendered images and removes those that
     # exist from the combined dictionary.
@@ -357,23 +359,29 @@ if __name__ == "__main__":
     #     "fuzzy fish": "fish",
     # })
 
+    # ontology = CaptionOntology({
+    #     "tree": "tree",
+    #     "car": "car",
+    #     "telephone pole": "pole",
+    #     "pole":"pole",
+    #     "deer":"deer",
+    #     "person":"person",
+    # })
+
     ontology = CaptionOntology({
-        "tree": "tree",
-        "car": "car",
-        "telephone pole": "pole",
-        "pole":"pole",
-        "deer":"deer",
-        "person":"person",
+        "grapes": "grapes",
+        "grape": "grapes",
     })
 
     # Polygon's size as a ratio of the image
     # Large polygons shouldn't be included...
     # area_thresh = 0.4
+    # area_thresh = 0.01
     area_thresh = 0.01
 
     # Non-maximum suppression threshold
     # nms_thresh = 0.1
-    nms_thresh = 0.6
+    nms_thresh = 0.9
 
     # Extract every N frames
     frame_stride = 15
@@ -382,7 +390,9 @@ if __name__ == "__main__":
     bsize = 64
 
     # use SAHI
-    use_sahi = True
+    use_sahi = False
+
+    file_ext = 'JPG'
 
 
     # Get the root data directory (Data); OCD
@@ -390,12 +400,16 @@ if __name__ == "__main__":
     # root = root.replace("\\", "/")
     # rdir = "B:/RockFinder/images"
     # rdir = "G:/sfm_agu/images_a/raw_dup"
-    rdir = "D:/sfm_deer/rgb_e85s70"
+    
+    # rdir = "D:/sfm_deer/rgb_e85s70"
+    
+    rdir = "/mnt/d/greeen/autodist_orig"
     print('\nRoot dir = {}'.format(rdir))
 
     # model_name_base = 'RockFinder'
     # model_name_base = 'FishFinder'
-    model_name_base = 'DeerMapper'
+    # model_name_base = 'DeerMapper'
+    model_name_base = 'GrapeMapper'
 
     # Converted videos from TATOR get placed here
     # converted_video_dir = f"{root}/Converted_Videos"
@@ -444,9 +458,9 @@ if __name__ == "__main__":
     # Currently we're creating single-class datasets, and
     # merging them together right before training the model
     if use_sahi:
-        dataset_name = model_name_base+"_05_sahi_png"
+        dataset_name = model_name_base+"_05_sahi_"+file_ext
     else:
-        dataset_name = model_name_base+"_05_png"
+        dataset_name = model_name_base+"_05_"+file_ext
 
     # The directory for the current dataset being created
     # current_data_dir = os.path.join(training_data_dir, dataset_name)
@@ -495,23 +509,29 @@ if __name__ == "__main__":
             print(f'\nGenerating labels for: {temporary_image_folder}')
             # Create labels for the images in temp folder
             dataset = base_model.label(input_folder=temporary_image_folder,
-                                       extension=".png",
+                                       extension="."+file_ext,
                                        output_folder=auto_labeled_dir,
-                                       record_confidence=False,
+                                       record_confidence=True,
                                        sahi=use_sahi)
-            print(len(list(dataset.images.keys())))
+            # print(len(list(dataset.images.keys())))
             # Delete the temporary copies
             # shutil.rmtree(temporary_image_folder)
 
             # Filter the dataset
-            image_names = list(dataset.images.keys())
-            print(len(image_names))
+            # image_names = list(dataset.images.keys())
+            # print(len(image_names))
+            print(len(dataset))
 
-            for image_name in tqdm(image_names):
+            # for image_name in tqdm(image_names):
+            for path, image, annotations in dataset:
                 # numpy arrays for this image
-                image = dataset.images[image_name]
-                annotations = dataset.annotations[image_name]
-                class_id = dataset.annotations[image_name].class_id
+                # image = dataset.images[image_name]
+                # annotations = dataset.annotations[image_name]
+                # class_id = dataset.annotations[image_name].class_id
+                class_id = annotations.class_id
+                # print('\n\nBEFORE PROCESSING:')
+                # print(path, image, annotations, class_id)
+                # print(dataset.annotations, annotations.class_id)
 
                 # Filter based on area and confidence (removes large and unconfident)
                 annotations = filter_detections(image, annotations, area_thresh)
@@ -522,8 +542,14 @@ if __name__ == "__main__":
                 annotations = annotations[indices]
 
                 # Update the annotations and class IDs in dataset
-                dataset.annotations[image_name] = annotations
-                dataset.annotations[image_name].class_id = np.zeros_like(class_id)
+                # dataset.annotations[image_name] = annotations
+                # dataset.annotations[image_name].class_id = np.zeros_like(class_id)
+                annotations = annotations
+                annotations.class_id = np.zeros_like(class_id)
+
+                # print('\n\nAFTER PROCESSING:')
+                # print(path, image, annotations, class_id)
+                # print(dataset.annotations, annotations.class_id)
 
             # Change the dataset classes
             dataset.classes = [f'{dataset_name}']
