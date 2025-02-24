@@ -47,7 +47,7 @@ class DetectionBaseModel(BaseModel):
     ) -> None:
         Path(annotations_directory_path).mkdir(parents=True, exist_ok=True)
         for image_name in image_names:
-            detections = annotations[image_name]
+            detections = annotations
             yolo_annotations_name, _ = os.path.splitext(image_name)
             confidence_path = os.path.join(
                 annotations_directory_path,

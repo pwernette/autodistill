@@ -56,7 +56,7 @@ def str_to_bool(s):
 
 
 def non_max_suppression(predictions: np.ndarray, iou_threshold: float = 0.5) -> np.ndarray:
-  rows, columns = predictions.shape
+  rows,_ = predictions.shape
 
   sort_index = np.flip(predictions[:, 4].argsort())
   predictions = predictions[sort_index]
@@ -185,13 +185,13 @@ def batch_and_copy_images(source_folder, output_folder, batch_size=64):
         # print(copy_path)
 
         # Copy the image file to the current output folder
-        shutil.copy2(image_file, copy_path)
+        shutil.copyfile(image_file, copy_path)
 
     print("Copies of images successfully created in batches of {} into {} folders.".format(batch_size,output_folder_index-1))
     print('Batched data saved in {}.\n'.format(output_folder_base))
 
 
-def filter_detections(image, annotations, area_thresh, conf_thresh=0.0):
+def filter_detections(image, annotations, area_thresh):
     """
 
     :param image:
@@ -200,16 +200,17 @@ def filter_detections(image, annotations, area_thresh, conf_thresh=0.0):
     :param conf_thresh:
     :return annotations:
     """
+    print('\nFiltering detection for {} with area:{} and confidence:{}'.format(image, area_thresh))
 
     # height, width = Image.open(image).size
-    print(image.shape)
+    # print(image.shape)
     height,width,_ = image.shape
-    image_area = height * width
 
     # Filter by area
-    annotations = annotations[(annotations.box_area / image_area) < area_thresh]
+    annotations = annotations[(annotations.box_area / (height * width)) < area_thresh]
 
     # Filter by confidence
+    # print(annotations.confidence)
     annotations = annotations[annotations.confidence > conf_thresh]
 
     return annotations
@@ -379,9 +380,11 @@ if __name__ == "__main__":
     # area_thresh = 0.01
     area_thresh = 0.01
 
+    conf_thresh = 0.15
+
     # Non-maximum suppression threshold
-    # nms_thresh = 0.1
-    nms_thresh = 0.9
+    nms_thresh = 0.1
+    # nms_thresh = 0.9
 
     # Extract every N frames
     frame_stride = 15
@@ -489,8 +492,8 @@ if __name__ == "__main__":
         if DETECTION:
             # Initialize the foundational base model, set the thresholds
             base_model = GroundingDINO(ontology=ontology,
-                                       box_threshold=0.05,
-                                       text_threshold=0.05)
+                                       box_threshold=conf_thresh,
+                                       text_threshold=conf_thresh)
             # For rendering
             include_boxes = True
             include_masks = False
@@ -498,8 +501,8 @@ if __name__ == "__main__":
         else:
             # Initialize the foundational base model, set the thresholds
             base_model = GroundedSAM(ontology=ontology,
-                                     box_threshold=0.1,
-                                     text_threshold=0.1)
+                                     box_threshold=conf_thresh,
+                                     text_threshold=conf_thresh)
             # For rendering
             include_boxes = False
             include_masks = True
@@ -511,7 +514,6 @@ if __name__ == "__main__":
             dataset = base_model.label(input_folder=temporary_image_folder,
                                        extension="."+file_ext,
                                        output_folder=auto_labeled_dir,
-                                       record_confidence=True,
                                        sahi=use_sahi)
             # print(len(list(dataset.images.keys())))
             # Delete the temporary copies
@@ -534,7 +536,8 @@ if __name__ == "__main__":
                 # print(dataset.annotations, annotations.class_id)
 
                 # Filter based on area and confidence (removes large and unconfident)
-                annotations = filter_detections(image, annotations, area_thresh)
+                if DETECTION:
+                    annotations = filter_detections(image, annotations, area_thresh)
 
                 # Filter based on NMS (removes all the duplicates, faster than with_nms)
                 predictions = np.column_stack((annotations.xyxy, annotations.confidence))
@@ -576,6 +579,6 @@ if __name__ == "__main__":
             # -----------------------------------------
             response = input(f"Delete any bad labeled frames from {os.path.basename(current_data_dir)} now...")
             # Remove images and labels from train/valid if they were deleted from rendered
-            remove_bad_data(current_data_dir)
+            remove_bad_data(current_data_dir, file_ext)
 
     print("Done.")
