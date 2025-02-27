@@ -144,7 +144,7 @@ def extract_frames(video_paths, image_dir, start_ratio=.15, end_ratio=.85, frame
         )
 
 
-def batch_and_copy_images(source_folder, output_folder, batch_size=64):
+def batch_and_copy_images(source_folder, output_folder, batch_size=64, file_ext='JPG'):
     """
 
     :param source_folder:
@@ -342,21 +342,26 @@ if __name__ == "__main__":
                         help='Ontology to use')
     parser.add_argument('-detect', action='store_true', help='Detect objects')
     parser.add_argument('-segment', action='store_true', help='Segment objects')
-    parser.add_argument('-area_thresh',  
+    parser.add_argument('-area','-area_thresh',  
                         dest='area_thresh', type=float, default=0.01, help='Area threshold for detections')
-    parser.add_argument('-conf_thresh',  
+    parser.add_argument('-conf','-conf_thresh',  
                         dest='conf_thresh', type=float, default=0.35, help='Confidence threshold for detections')
-    parser.add_argument('-nms_thresh',  
+    parser.add_argument('-nms','-nms_thresh',  
                         dest='nms_thresh', type=float, default=0.5, help='NMS threshold for detections')
     parser.add_argument('-bsize',  
                         dest='bsize', type=int, default=32, help='Batch size')
     parser.add_argument('-use_sahi', action='store_true', help='Use SAHI')
     parser.add_argument('-file_ext',  
                         dest='file_ext', type=str, default='JPG', help='File extension')
+    parser.add_argument('-verbose', action='store_true', help='Run in verbose mode')
 
     args = parser.parse_args()
 
     assert args.detect or args.segment, ValueError('Specify either -detect or -segment')
+    if args.detect:
+        mode = 'detect'
+    else:
+        mode = 'segment'
 
     # ------------------------------------------------------
     # Modify each of these as needed!
@@ -457,70 +462,34 @@ if __name__ == "__main__":
     #     "grapes": "grapes",
     #     "grape": "grapes",
     # })
-    ontology = ont_dict[args.ont]
+    # ontology = ont_dict[args.ont]
 
-    # Polygon's size as a ratio of the image
-    # Large polygons shouldn't be included...
-    # area_thresh = 0.4
+    # # Polygon's size as a ratio of the image
+    # # Large polygons shouldn't be included...
+    # # area_thresh = 0.4
+    # # area_thresh = 0.01
     # area_thresh = 0.01
-    area_thresh = 0.01
 
-    # conf_thresh = 0.15
-    # conf_thresh = 0.3
-    conf_thresh = 0.35
-    # conf_thresh = 0.6
+    # # conf_thresh = 0.15
+    # # conf_thresh = 0.3
+    # conf_thresh = 0.35
+    # # conf_thresh = 0.6
 
-    # Non-maximum suppression threshold
-    # nms_thresh = 0.1
-    # nms_thresh = 0.9
-    nms_thresh = 0.5
+    # # Non-maximum suppression threshold
+    # # nms_thresh = 0.1
+    # # nms_thresh = 0.9
+    # nms_thresh = 0.5
 
-    # Extract every N frames
-    frame_stride = 15
-    
-    # batch size
-    bsize = 32
+    if args.verbose:
+        print('\nRoot dir = {}'.format(args.dir))
 
-    # use SAHI
-    use_sahi = False
-
-    file_ext = 'JPG'
-
-
-    # Get the root data directory (Data); OCD
-    # rdir = os.path.dirname("B:/RockFinder/images")
-    # root = root.replace("\\", "/")
-    # rdir = "B:/RockFinder/images"
-    # rdir = "G:/sfm_agu/images_a/raw_dup"
-    
-    # rdir = "D:/sfm_deer/rgb_e85s70"
-    
-    # rdir = "/mnt/d/greeen/autodist_orig"
-    rdir = "/mnt/h/GrapeFinder/CabFranc_original"
-    print('\nRoot dir = {}'.format(args.dir))
-
-    # model_name_base = 'RockFinder'
-    # model_name_base = 'FishFinder'
-    # model_name_base = 'DeerMapper'
-    model_name_base = 'GrapeMapper'
-
-    # Converted videos from TATOR get placed here
-    # converted_video_dir = f"{root}/Converted_Videos"
-    # os.makedirs(converted_video_dir, exist_ok=True)
-
-    # Extracted frames from Converted videos go here
-    # input_dir = os.path.join(rdir,"images_resize_05_png")
-    # input_dir = os.path.join(rdir,"images_resize_03")
-    # input_dir = f'{rdir}/images_resize_05'
-    input_dir = rdir
-    os.makedirs(input_dir, exist_ok=True)
     print('\nInput directory = {}'.format(args.dir))
 
     # Frames are batched (RAM) and temporarily placed here
     # batched_dir = os.path.join(rdir,"images_resize_05_png_b"+str(bsize))
     # batched_dir = os.path.join(rdir,"images_resize_03_b"+str(bsize))
     # batched_dir = f'{rdir}/images_resize_05_b{str(bsize)}'
-    batched_dir = f'{args.dir}/images_b{str(bsize)}'
+    batched_dir = f'{args.dir}/images_b{str(args.bsize)}'
 
     # If it exists from last time (exited early) delete
     if os.path.exists(batched_dir):
@@ -531,10 +500,10 @@ if __name__ == "__main__":
 
     # Auto labeled data; this is also temporary until being filtered
     # auto_labeled_dir = os.path.join(rdir,"Auto_Labeled")
-    if use_sahi:
-        auto_labeled_dir = f'{args.dir}/{model_name_base}_Auto_Labeled_05_sahi'
+    if args.use_sahi:
+        auto_labeled_dir = f'{args.dir}/{model_name_dict[args.ont]}_Auto_Labeled_sahi'
     else:
-        auto_labeled_dir = f'{args.dir}/{model_name_base}_Auto_Labeled_05'
+        auto_labeled_dir = f'{args.dir}/{model_name_dict[args.ont]}_Auto_Labeled'
     if os.path.isdir(auto_labeled_dir):
         print('\n{} found. Deleting existing directory.'.format(auto_labeled_dir))
         shutil.rmtree(auto_labeled_dir, ignore_errors=True)
@@ -550,10 +519,11 @@ if __name__ == "__main__":
 
     # Currently we're creating single-class datasets, and
     # merging them together right before training the model
-    if use_sahi:
-        dataset_name = model_name_base+"_05_sahi_"+args.file_ext
+
+    if args.use_sahi:
+        dataset_name = model_name_dict[args.ont]+'_'+mode+'_'+str(args.conf_thresh)+'_'+str(args.nms_thresh)+"_sahi_"+args.file_ext
     else:
-        dataset_name = model_name_base+"_05_"+args.file_ext
+        dataset_name = model_name_dict[args.ont]+'_'+mode+'_'+str(args.conf_thresh)+'_'+str(args.nms_thresh)+"_"+args.file_ext
 
     # The directory for the current dataset being created
     # current_data_dir = os.path.join(training_data_dir, dataset_name)
@@ -574,12 +544,12 @@ if __name__ == "__main__":
     if CREATE_LABELS:
         # Make copies of the extracted frames, make in batches of N
         # This has to be done because the auto labeler is RAM heavy
-        batch_and_copy_images(args.dir, batched_dir, batch_size=args.bsize)
+        batch_and_copy_images(args.dir, batched_dir, batch_size=args.bsize, file_ext=args.file_ext)
         temporary_image_folders = glob.glob(f"{batched_dir}/images_*")
         # temporary_image_folders = [batched_dir]
         print("Batch Folders Found: ", len(temporary_image_folders))
 
-        if DETECTION:
+        if args.detect:
             # Initialize the foundational base model, set the thresholds
             base_model = GroundingDINO(ontology=ont_dict[args.ont],
                                        box_threshold=args.conf_thresh,
@@ -604,15 +574,13 @@ if __name__ == "__main__":
             dataset = base_model.label(input_folder=temporary_image_folder,
                                        extension="."+args.file_ext,
                                        output_folder=auto_labeled_dir,
-                                       sahi=use_sahi)
+                                       sahi=args.use_sahi)
             # print(len(list(dataset.images.keys())))
             # Delete the temporary copies
-            # shutil.rmtree(temporary_image_folder)
+            shutil.rmtree(temporary_image_folder)
 
             # Filter the dataset
-            # image_names = list(dataset.images.keys())
-            # print(len(image_names))
-            print(len(dataset))
+            # print(len(dataset))
 
             # for image_name in tqdm(image_names):
             for path, image, annotations in dataset:
