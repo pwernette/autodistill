@@ -73,7 +73,7 @@ def load_image(
         raise ValueError(f"{image} is not a valid file path or URI")
 
 
-def split_data(base_dir, split_ratio=0.8, record_confidence=False):
+def split_data(base_dir, split_ratio=0.8, record_confidence=False, file_extension='jpg'):
     images_dir = os.path.join(base_dir, "images")
     annotations_dir = os.path.join(base_dir, "annotations")
 
@@ -87,20 +87,20 @@ def split_data(base_dir, split_ratio=0.8, record_confidence=False):
 
     # Convert .png and .jpeg images to .jpg
     for file in os.listdir(images_dir):
-        if file.endswith(".png"):
+        if file.lower().endswith(".png"):
             img = Image.open(os.path.join(images_dir, file))
             rgb_img = img.convert("RGB")
-            rgb_img.save(os.path.join(images_dir, file.replace(".png", ".jpg")))
+            rgb_img.save(os.path.join(images_dir, file.replace(".png", "."+file_extension)))
             os.remove(os.path.join(images_dir, file))
-        if file.endswith(".jpeg"):
+        if file.lower().endswith(".jpeg"):
             img = Image.open(os.path.join(images_dir, file))
             rgb_img = img.convert("RGB")
-            rgb_img.save(os.path.join(images_dir, file.replace(".jpeg", ".jpg")))
+            rgb_img.save(os.path.join(images_dir, file.replace(".jpeg", "."+file_extension)))
             os.remove(os.path.join(images_dir, file))
 
     # Get list of all files (removing the image file extension)
     all_files = os.listdir(images_dir)
-    all_files = [os.path.splitext(f)[0] for f in all_files if f.endswith(".jpg")]
+    all_files = [os.path.splitext(f)[0] for f in all_files if f.endswith("."+file_extension)]
 
     # Shuffle the files
     random.shuffle(all_files)
@@ -143,20 +143,22 @@ def split_data(base_dir, split_ratio=0.8, record_confidence=False):
         shutil.move(os.path.join(source_dir, source_file), dest_dir)
 
     for file in train_files:
-        _check_move_file(images_dir, file + ".jpg", train_images_dir)
-        _check_move_file(annotations_dir, file + ".txt", train_labels_dir)
+        _check_move_file(images_dir, file+"."+file_extension, train_images_dir)
+        _check_move_file(annotations_dir, file+".txt", train_labels_dir)
         if record_confidence:
             _check_move_file(
-                annotations_dir, "confidence-" + file + ".txt", train_labels_dir
+                annotations_dir, "confidence-" + file+".txt", train_labels_dir
             )
+        print("Moved {} to {}".format(file, train_images_dir))
 
     for file in valid_files:
-        _check_move_file(images_dir, file + ".jpg", valid_images_dir)
-        _check_move_file(annotations_dir, file + ".txt", valid_labels_dir)
+        _check_move_file(images_dir, file+"."+file_extension, valid_images_dir)
+        _check_move_file(annotations_dir, file+".txt", valid_labels_dir)
         if record_confidence:
             _check_move_file(
-                annotations_dir, "confidence-" + file + ".txt", valid_labels_dir
+                annotations_dir, "confidence-" + file+".txt", valid_labels_dir
             )
+        print("Moved {} to {}".format(file, valid_images_dir))
 
     # Load the existing YAML file to get the names
     with open(os.path.join(base_dir, "data.yaml"), "r") as file:

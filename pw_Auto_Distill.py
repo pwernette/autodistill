@@ -1,6 +1,7 @@
 import os
 import glob
 import shutil
+import argparse
 import subprocess
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
@@ -191,7 +192,7 @@ def batch_and_copy_images(source_folder, output_folder, batch_size=64):
     print('Batched data saved in {}.\n'.format(output_folder_base))
 
 
-def filter_detections(image, annotations, area_thresh):
+def filter_detections(filt_image, annotations, area_thresh):
     """
 
     :param image:
@@ -200,11 +201,11 @@ def filter_detections(image, annotations, area_thresh):
     :param conf_thresh:
     :return annotations:
     """
-    print('\nFiltering detection for {} with area:{} and confidence:{}'.format(image, area_thresh))
+    # print('\nFiltering detection for {} with area:{}'.format(image, area_thresh))
 
     # height, width = Image.open(image).size
     # print(image.shape)
-    height,width,_ = image.shape
+    height,width,_ = filt_image.shape
 
     # Filter by area
     annotations = annotations[(annotations.box_area / (height * width)) < area_thresh]
@@ -230,10 +231,10 @@ def render_dataset(dataset, output_dir, include_boxes=True, include_masks=False)
 
     # Create the annotation object
     mask_annotator = sv.MaskAnnotator()
-    box_annotator = sv.BoundingBoxAnnotator()
+    box_annotator = sv.BoxAnnotator()
 
     with sv.ImageSink(target_dir_path=output_dir, overwrite=False) as sink:
-        for path, image, annotations in dataset:
+        for path, imag, annot in dataset:
         # for i_idx, image_name in enumerate(image_names):
 
             # Get the images and annotation
@@ -242,66 +243,81 @@ def render_dataset(dataset, output_dir, include_boxes=True, include_masks=False)
 
             if include_boxes:
                 # Get the boxes for the annotations
-                image = box_annotator.annotate(scene=image, detections=annotations)
+                imag = box_annotator.annotate(scene=imag, detections=annot)
 
             if include_masks:
                 # Get the masks for the annotations
-                image = mask_annotator.annotate(scene=image, detections=annotations)
+                imag = mask_annotator.annotate(scene=imag, detections=annot)
 
             # output_file = os.path.basename(image_name)
             output_file = os.path.basename(path)
-            sink.save_image(image=image, image_name=output_file)
+            sink.save_image(image=imag, image_name=output_file)
 
 
-def remove_bad_data(data_dir, fileext):
+def remove_bad_data(data_dir, fileext='JPG'):
     """
 
     :param data_dir:
     :return:
     """
     # Set the paths
-    train_dir = f"{data_dir}/train"
-    valid_dir = f"{data_dir}/valid"
-    render_dir = f"{data_dir}/rendered"
+    train_dir = os.path.join(data_dir,"train")
+    valid_dir = os.path.join(data_dir,"valid")
+    render_dir = os.path.join(data_dir,"rendered")
 
     # Make sure they exist
     assert os.path.exists(train_dir)
     assert os.path.exists(valid_dir)
     assert os.path.exists(render_dir)
 
+    print('train_dir = {}'.format(train_dir))
+    print('valid_dir = {}'.format(valid_dir))
+    print('render_dir = {}'.format(render_dir))
+
     combined_dict = {}
 
     # Get all the training images and labels paths
-    train_images = glob.glob(f"{train_dir}/images/*.{fileext}")
-    train_labels = glob.glob(f"{train_dir}/labels/*.txt")
+    train_images = glob.glob(os.path.join(train_dir,"images","*."+fileext))
+    train_labels = glob.glob(os.path.join(train_dir,"labels","*.txt"))
+    print('found {} train images in {}'.format(len(train_images),os.path.join(train_dir,"images")))
 
-    for image, label in zip(train_images, train_labels):
-        basename = os.path.basename(image).split(".")[0]
+    for img, lab in zip(train_images, train_labels):
+        basename = os.path.basename(img).split(".")[0]
+        print('training image: {}'.format(basename))
         combined_dict[basename] = {
-            "image": image,
-            "label": label
+            "image": img,
+            "label": lab
         }
 
     # Get all the validation images and labels paths
-    valid_images = glob.glob(f"{valid_dir}/images/*.{fileext}")
-    valid_labels = glob.glob(f"{valid_dir}/labels/*.txt")
+    valid_images = glob.glob(os.path.join(valid_dir,"images","*."+fileext))
+    valid_labels = glob.glob(os.path.join(valid_dir,"labels","*.txt"))
 
-    for image, label in zip(valid_images, valid_labels):
-        basename = os.path.basename(image).split(".")[0]
+    for img, lab in zip(valid_images, valid_labels):
+        basename = os.path.basename(img).split(".")[0]
+        print('validation image: {}'.format(basename))
         combined_dict[basename] = {
-            "image": image,
-            "label": label
+            "image": img,
+            "label": lab
         }
 
     # Get the rendered images
-    render_images = glob.glob(f"{render_dir}/*."+fileext)
+    render_images = glob.glob(os.path.join(render_dir,"*."+fileext))
+    print('found {} rendered images in {}'.format(len(render_images),render_dir))
+
+    print('combined_dict {}'.format(combined_dict))
+
+    print('pre-filter: combined_dict length = {}'.format(len(combined_dict)))
 
     # Loop through the rendered images and removes those that
     # exist from the combined dictionary.
     for render_image in render_images:
         basename = os.path.basename(render_image).split(".")[0]
+        print('rendered image: {}'.format(basename))
         if basename in combined_dict:
             combined_dict.pop(basename)
+    
+    print('post-filter: combined_dict length = {}'.format(len(combined_dict)))
 
     # Finally, loop though the remaining image / labels,
     # representing the bad data, and delete them.
@@ -317,6 +333,31 @@ def remove_bad_data(data_dir, fileext):
 # ----------------------------------------------------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Video Processing with YOLO and ByteTrack")
+
+    parser.add_argument('-dir',  
+                        dest='dir', type=str, help='Directory to process')
+    parser.add_argument('-ont',  
+                        dest='ont', type=str, choices=['grapes','rocks','mussels','fish','shells','trees'], default='grapes', 
+                        help='Ontology to use')
+    parser.add_argument('-detect', action='store_true', help='Detect objects')
+    parser.add_argument('-segment', action='store_true', help='Segment objects')
+    parser.add_argument('-area_thresh',  
+                        dest='area_thresh', type=float, default=0.01, help='Area threshold for detections')
+    parser.add_argument('-conf_thresh',  
+                        dest='conf_thresh', type=float, default=0.35, help='Confidence threshold for detections')
+    parser.add_argument('-nms_thresh',  
+                        dest='nms_thresh', type=float, default=0.5, help='NMS threshold for detections')
+    parser.add_argument('-bsize',  
+                        dest='bsize', type=int, default=32, help='Batch size')
+    parser.add_argument('-use_sahi', action='store_true', help='Use SAHI')
+    parser.add_argument('-file_ext',  
+                        dest='file_ext', type=str, default='JPG', help='File extension')
+
+    args = parser.parse_args()
+
+    assert args.detect or args.segment, ValueError('Specify either -detect or -segment')
+
     # ------------------------------------------------------
     # Modify each of these as needed!
 
@@ -328,13 +369,56 @@ if __name__ == "__main__":
     SAVE_LABELS = True
 
     # CV Tasks
-    DETECTION = True
-    SEGMENTATION = False
+    # DETECTION = False
+    # SEGMENTATION = True
 
     # There can only be one
-    assert DETECTION != SEGMENTATION
+    # assert DETECTION != SEGMENTATION
 
     # Set up the labeling ontology
+    ont_dict = {
+        'grapes': CaptionOntology({
+            "grapes": "grapes",
+        }),
+        'rocks': CaptionOntology({
+            "rock": "rock",
+            "tiny rock": "rock",
+            "small rock": "rock",
+            "big rock": "rock",
+            "fuzzy rock": "rock",
+            "smooth rock": "rock",
+        }),
+        'mussels': CaptionOntology({
+            "mussel": "mussel",
+            "mussel": "clam",
+            "mussel": "oyster"
+        }),
+        'fish': CaptionOntology({
+            "shell": "shell",
+            "shell hash": "shell hash",
+        }),
+        'shells': CaptionOntology({
+            "shell": "shell",
+            "shell hash": "shell hash",
+        }),
+        'trees': CaptionOntology({
+            "tree": "tree",
+            "big tree": "tree",
+            "small tree": "tree",
+            "tiny tree": "tree",
+            "fuzzy tree": "tree",
+            "smooth tree": "tree",
+        }),
+    }
+
+    model_name_dict = {
+        'grapes': "GrapeMapper",
+        'rocks': "RockMapper",
+        'mussels': "MusselMapper",
+        'fish': "FishMapper",
+        'shells': "ShellMapper",
+        'trees': "TreeMapper",
+    }
     # ontology = CaptionOntology({
     #     "rock": "rock",
     #     "tiny rock": "rock",
@@ -369,10 +453,11 @@ if __name__ == "__main__":
     #     "person":"person",
     # })
 
-    ontology = CaptionOntology({
-        "grapes": "grapes",
-        "grape": "grapes",
-    })
+    # ontology = CaptionOntology({
+    #     "grapes": "grapes",
+    #     "grape": "grapes",
+    # })
+    ontology = ont_dict[args.ont]
 
     # Polygon's size as a ratio of the image
     # Large polygons shouldn't be included...
@@ -380,17 +465,21 @@ if __name__ == "__main__":
     # area_thresh = 0.01
     area_thresh = 0.01
 
-    conf_thresh = 0.15
+    # conf_thresh = 0.15
+    # conf_thresh = 0.3
+    conf_thresh = 0.35
+    # conf_thresh = 0.6
 
     # Non-maximum suppression threshold
-    nms_thresh = 0.1
+    # nms_thresh = 0.1
     # nms_thresh = 0.9
+    nms_thresh = 0.5
 
     # Extract every N frames
     frame_stride = 15
     
     # batch size
-    bsize = 64
+    bsize = 32
 
     # use SAHI
     use_sahi = False
@@ -406,8 +495,9 @@ if __name__ == "__main__":
     
     # rdir = "D:/sfm_deer/rgb_e85s70"
     
-    rdir = "/mnt/d/greeen/autodist_orig"
-    print('\nRoot dir = {}'.format(rdir))
+    # rdir = "/mnt/d/greeen/autodist_orig"
+    rdir = "/mnt/h/GrapeFinder/CabFranc_original"
+    print('\nRoot dir = {}'.format(args.dir))
 
     # model_name_base = 'RockFinder'
     # model_name_base = 'FishFinder'
@@ -424,13 +514,13 @@ if __name__ == "__main__":
     # input_dir = f'{rdir}/images_resize_05'
     input_dir = rdir
     os.makedirs(input_dir, exist_ok=True)
-    print('\nInput directory = {}'.format(input_dir))
+    print('\nInput directory = {}'.format(args.dir))
 
     # Frames are batched (RAM) and temporarily placed here
     # batched_dir = os.path.join(rdir,"images_resize_05_png_b"+str(bsize))
     # batched_dir = os.path.join(rdir,"images_resize_03_b"+str(bsize))
     # batched_dir = f'{rdir}/images_resize_05_b{str(bsize)}'
-    batched_dir = f'{rdir}/images_b{str(bsize)}'
+    batched_dir = f'{args.dir}/images_b{str(bsize)}'
 
     # If it exists from last time (exited early) delete
     if os.path.exists(batched_dir):
@@ -442,9 +532,9 @@ if __name__ == "__main__":
     # Auto labeled data; this is also temporary until being filtered
     # auto_labeled_dir = os.path.join(rdir,"Auto_Labeled")
     if use_sahi:
-        auto_labeled_dir = f'{rdir}/{model_name_base}_Auto_Labeled_05_sahi'
+        auto_labeled_dir = f'{args.dir}/{model_name_base}_Auto_Labeled_05_sahi'
     else:
-        auto_labeled_dir = f'{rdir}/{model_name_base}_Auto_Labeled_05'
+        auto_labeled_dir = f'{args.dir}/{model_name_base}_Auto_Labeled_05'
     if os.path.isdir(auto_labeled_dir):
         print('\n{} found. Deleting existing directory.'.format(auto_labeled_dir))
         shutil.rmtree(auto_labeled_dir, ignore_errors=True)
@@ -452,7 +542,7 @@ if __name__ == "__main__":
 
     # The root folder containing *all* post-processed dataset for training
     # training_data_dir = os.path.join(rdir,"Training_Data")
-    training_data_dir = f'{rdir}/Training_Data'
+    training_data_dir = f'{args.dir}/Training_Data'
     os.makedirs(training_data_dir, exist_ok=True)
 
     # ------------------------------------------------------
@@ -461,9 +551,9 @@ if __name__ == "__main__":
     # Currently we're creating single-class datasets, and
     # merging them together right before training the model
     if use_sahi:
-        dataset_name = model_name_base+"_05_sahi_"+file_ext
+        dataset_name = model_name_base+"_05_sahi_"+args.file_ext
     else:
-        dataset_name = model_name_base+"_05_"+file_ext
+        dataset_name = model_name_base+"_05_"+args.file_ext
 
     # The directory for the current dataset being created
     # current_data_dir = os.path.join(training_data_dir, dataset_name)
@@ -484,25 +574,25 @@ if __name__ == "__main__":
     if CREATE_LABELS:
         # Make copies of the extracted frames, make in batches of N
         # This has to be done because the auto labeler is RAM heavy
-        batch_and_copy_images(input_dir, batched_dir, batch_size=bsize)
+        batch_and_copy_images(args.dir, batched_dir, batch_size=args.bsize)
         temporary_image_folders = glob.glob(f"{batched_dir}/images_*")
         # temporary_image_folders = [batched_dir]
         print("Batch Folders Found: ", len(temporary_image_folders))
 
         if DETECTION:
             # Initialize the foundational base model, set the thresholds
-            base_model = GroundingDINO(ontology=ontology,
-                                       box_threshold=conf_thresh,
-                                       text_threshold=conf_thresh)
+            base_model = GroundingDINO(ontology=ont_dict[args.ont],
+                                       box_threshold=args.conf_thresh,
+                                       text_threshold=args.conf_thresh)
             # For rendering
             include_boxes = True
             include_masks = False
 
         else:
             # Initialize the foundational base model, set the thresholds
-            base_model = GroundedSAM(ontology=ontology,
-                                     box_threshold=conf_thresh,
-                                     text_threshold=conf_thresh)
+            base_model = GroundedSAM(ontology=ont_dict[args.ont],
+                                     box_threshold=args.conf_thresh,
+                                     text_threshold=args.conf_thresh)
             # For rendering
             include_boxes = False
             include_masks = True
@@ -512,7 +602,7 @@ if __name__ == "__main__":
             print(f'\nGenerating labels for: {temporary_image_folder}')
             # Create labels for the images in temp folder
             dataset = base_model.label(input_folder=temporary_image_folder,
-                                       extension="."+file_ext,
+                                       extension="."+args.file_ext,
                                        output_folder=auto_labeled_dir,
                                        sahi=use_sahi)
             # print(len(list(dataset.images.keys())))
@@ -527,33 +617,22 @@ if __name__ == "__main__":
             # for image_name in tqdm(image_names):
             for path, image, annotations in dataset:
                 # numpy arrays for this image
-                # image = dataset.images[image_name]
-                # annotations = dataset.annotations[image_name]
-                # class_id = dataset.annotations[image_name].class_id
                 class_id = annotations.class_id
-                # print('\n\nBEFORE PROCESSING:')
-                # print(path, image, annotations, class_id)
-                # print(dataset.annotations, annotations.class_id)
 
                 # Filter based on area and confidence (removes large and unconfident)
-                if DETECTION:
-                    annotations = filter_detections(image, annotations, area_thresh)
+                if args.detect:
+                    annotations = filter_detections(image, annotations, args.area_thresh)
 
                 # Filter based on NMS (removes all the duplicates, faster than with_nms)
                 predictions = np.column_stack((annotations.xyxy, annotations.confidence))
-                indices = non_max_suppression(predictions, nms_thresh)
-                annotations = annotations[indices]
-
-                # Update the annotations and class IDs in dataset
-                # dataset.annotations[image_name] = annotations
-                # dataset.annotations[image_name].class_id = np.zeros_like(class_id)
-                annotations = annotations
-                annotations.class_id = np.zeros_like(class_id)
-
-                # print('\n\nAFTER PROCESSING:')
-                # print(path, image, annotations, class_id)
-                # print(dataset.annotations, annotations.class_id)
-
+                indices = non_max_suppression(predictions, args.nms_thresh)
+                if len(indices) > 0:
+                    annotations = annotations[indices]
+                    # annotations = annotations
+                    annotations.class_id = np.zeros_like(class_id)
+                else:
+                    annotations = None
+                    
             # Change the dataset classes
             dataset.classes = [f'{dataset_name}']
 
@@ -572,13 +651,16 @@ if __name__ == "__main__":
 
         if SAVE_LABELS:
             # Split the filtered dataset into training / valid
-            helpers.split_data(current_data_dir, record_confidence=True)
+            if args.detect:
+                helpers.split_data(current_data_dir, record_confidence=True, file_extension=args.file_ext)
+            else:
+                helpers.split_data(current_data_dir, record_confidence=False, file_extension=args.file_ext)
 
             # -----------------------------------------
             # Manually delete any images as needed!
             # -----------------------------------------
-            response = input(f"Delete any bad labeled frames from {os.path.basename(current_data_dir)} now...")
+            response = input("Delete any bad labeled frames from {} now...".format(current_data_dir))
             # Remove images and labels from train/valid if they were deleted from rendered
-            remove_bad_data(current_data_dir, file_ext)
+            remove_bad_data(current_data_dir, args.file_ext)
 
     print("Done.")
