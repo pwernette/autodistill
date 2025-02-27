@@ -192,7 +192,7 @@ def batch_and_copy_images(source_folder, output_folder, batch_size=64, file_ext=
     print('Batched data saved in {}.\n'.format(output_folder_base))
 
 
-def filter_detections(filt_image, annotations, area_thresh):
+def filter_detections(image, annotations, area_thresh, conf_thresh):
     """
 
     :param image:
@@ -203,9 +203,9 @@ def filter_detections(filt_image, annotations, area_thresh):
     """
     # print('\nFiltering detection for {} with area:{}'.format(image, area_thresh))
 
-    # height, width = Image.open(image).size
+    # height, width = Image.open(filt_image).size
     # print(image.shape)
-    height,width,_ = filt_image.shape
+    height,width,_ = image.shape
 
     # Filter by area
     annotations = annotations[(annotations.box_area / (height * width)) < area_thresh]
@@ -577,7 +577,7 @@ if __name__ == "__main__":
                                        sahi=args.use_sahi)
             # print(len(list(dataset.images.keys())))
             # Delete the temporary copies
-            shutil.rmtree(temporary_image_folder)
+            # shutil.rmtree(temporary_image_folder)
 
             # Filter the dataset
             # print(len(dataset))
@@ -589,7 +589,7 @@ if __name__ == "__main__":
 
                 # Filter based on area and confidence (removes large and unconfident)
                 if args.detect:
-                    annotations = filter_detections(image, annotations, args.area_thresh)
+                    annotations = filter_detections(image, annotations, args.area_thresh, conf_thresh=args.conf_thresh)
 
                 # Filter based on NMS (removes all the duplicates, faster than with_nms)
                 predictions = np.column_stack((annotations.xyxy, annotations.confidence))
