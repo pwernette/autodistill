@@ -90,8 +90,8 @@ elif base_model_type == 'sam2':
 
 # sv.plot_image(annotated_frame)
 
-target_model = YOLOv8("yolov8n.pt")
-target_model.train(folder_to_place, epochs=100)
+# target_model = YOLOv8("yolov8n.pt")
+# target_model.train(folder_to_place, epochs=100)
 
 # from IPython.display import Image
 
