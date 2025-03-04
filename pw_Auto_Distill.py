@@ -338,7 +338,7 @@ if __name__ == "__main__":
     parser.add_argument('-dir',  
                         dest='dir', type=str, help='Directory to process')
     parser.add_argument('-ont',  
-                        dest='ont', type=str, choices=['grapes','rocks','mussels','fish','shells','trees'], default='grapes', 
+                        dest='ont', type=str, choices=['grapes','rocks','mussels','fish','shells','trees','viticulture'], default='grapes', 
                         help='Ontology to use')
     parser.add_argument('-detect', action='store_true', help='Detect objects')
     parser.add_argument('-segment', action='store_true', help='Segment objects')
@@ -414,6 +414,43 @@ if __name__ == "__main__":
             "fuzzy tree": "tree",
             "smooth tree": "tree",
         }),
+        'viticulture': CaptionOntology({
+            "grape": "grape",
+            "vine": "stem",
+            "grapevine": "stem",
+            "wine grape": "grape",
+            "wine vine": "stem",
+            "grape vine": "stem",
+            "vine grape": "grape",
+            "vine wine grape": "grape",
+            "grapevine grape": "grape",
+            "grapevine vine": "stem",
+            "wine grapevine grape": "grape",
+            "wine grapevine vine": "stem",
+            "grape grapevine": "grape",
+            "grape wine grape": "grape",
+            "grape wine vine": "stem",
+            "grape wine grapevine": "stem",
+            "vine grapevine grape": "grape",
+            "vine grapevine vine": "stem",
+            "stem": "stem",
+            "stems": "stem",
+            "trunk": "stem",
+            "trunks": "stem",
+            "branch": "stem",
+            "branches": "stem",
+            "branchlet": "stem",
+            "branchlets": "stem",
+            "sky": "sky",
+            "blue sky": "sky",
+            "cloud": "sky",
+            "foliage": "foliage",
+            "foliages": "foliage",
+            "leaves": "foliage",
+            "leaf": "foliage",
+            "post": "stem",
+            "posts": "stem",
+        }),
     }
 
     model_name_dict = {
@@ -423,6 +460,7 @@ if __name__ == "__main__":
         'fish': "FishMapper",
         'shells': "ShellMapper",
         'trees': "TreeMapper",
+        'viticulture': "VinesMapper",
     }
     # ontology = CaptionOntology({
     #     "rock": "rock",
@@ -521,9 +559,9 @@ if __name__ == "__main__":
     # merging them together right before training the model
 
     if args.use_sahi:
-        dataset_name = model_name_dict[args.ont]+'_'+mode+'_'+str(args.conf_thresh)+'_'+str(args.nms_thresh)+"_sahi_"+args.file_ext
+        dataset_name = model_name_dict[args.ont]+'_'+mode+'_'+str(args.conf_thresh)+'_'+str(args.nms_thresh)+'_'+str(args.area_thresh)+"_sahi_"+args.file_ext
     else:
-        dataset_name = model_name_dict[args.ont]+'_'+mode+'_'+str(args.conf_thresh)+'_'+str(args.nms_thresh)+"_"+args.file_ext
+        dataset_name = model_name_dict[args.ont]+'_'+mode+'_'+str(args.conf_thresh)+'_'+str(args.nms_thresh)+'_'+str(args.area_thresh)+"_"+args.file_ext
 
     # The directory for the current dataset being created
     # current_data_dir = os.path.join(training_data_dir, dataset_name)
@@ -589,7 +627,7 @@ if __name__ == "__main__":
 
                 # Filter based on area and confidence (removes large and unconfident)
                 if args.detect:
-                    annotations = filter_detections(image, annotations, args.area_thresh, conf_thresh=args.conf_thresh)
+                    annotations = filter_detections(image, annotations, area_thresh=args.area_thresh, conf_thresh=args.conf_thresh)
 
                 # Filter based on NMS (removes all the duplicates, faster than with_nms)
                 predictions = np.column_stack((annotations.xyxy, annotations.confidence))
