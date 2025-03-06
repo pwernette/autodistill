@@ -78,7 +78,7 @@ if __name__ == '__main__':
     parser.add_argument("-d", "-data_dir", "-datadir", "-dir", "-root", "-rdir",
                         dest="rdir",
                         type=str,
-                        default="/mnt/e/greeen/CabFranc_original/Training_Data/GrapeMapper_segment_0.5_0.5_0.01_JPG",
+                        default="/mnt/e/greeen/CabFranc_original/Training_Data/GrapeMapper_detect_0.4_0.5_0.01_JPG",
                         help="The root data directory (Data); OCD")
     parser.add_argument("-o", "-out_dir", "-outdir",
                         dest="outdir",

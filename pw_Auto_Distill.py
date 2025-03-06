@@ -640,7 +640,7 @@ if __name__ == "__main__":
                     annotations = None
                     
             # Change the dataset classes
-            dataset.classes = [f'{dataset_name}']
+            # dataset.classes = [f'{dataset_name}']
 
             if SAVE_LABELS:
                 # Save the filtered dataset (this is used for training)
