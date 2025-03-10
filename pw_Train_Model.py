@@ -78,7 +78,9 @@ if __name__ == '__main__':
     parser.add_argument("-d", "-data_dir", "-datadir", "-dir", "-root", "-rdir",
                         dest="rdir",
                         type=str,
-                        default="/mnt/e/greeen/CabFranc_original/Training_Data/GrapeMapper_detect_0.4_0.5_0.01_JPG",
+                        # default="/mnt/e/greeen/CabFranc_original/Training_Data/GrapeMapper_detect_0.4_0.5_0.01_JPG",
+                        default="E:/GrapeFinder/CabFranc_original/Training_Data/GrapeMapper_detect_0.4_0.5_0.01_JPG",
+                        required=True,
                         help="The root data directory (Data); OCD")
     parser.add_argument("-o", "-out_dir", "-outdir",
                         dest="outdir",
@@ -114,7 +116,7 @@ if __name__ == '__main__':
     parser.add_argument('-base', '-base_model',  
                         dest='base_model',
                         type=str,
-                        default='yolov8',
+                        default='yolov11',
                         choices=['yolov8', 'yolov11'],
                         help='Base model to use')
     parser.add_argument('-opt', '-optimizer',  
@@ -183,7 +185,7 @@ if __name__ == '__main__':
             weights = "yolov11n-seg.pt"
 
     # Name of the run
-    run_name = f"{get_now()}_{weights.split('.')[0]}"
+    run_name = f"{get_now()}_{weights.split('.')[0]}_{os.path.basename(args.rdir)}"
 
     # Access pre-trained model
     target_model = YOLO(weights)

@@ -353,7 +353,10 @@ if __name__ == "__main__":
     parser.add_argument('-use_sahi', action='store_true', help='Use SAHI')
     parser.add_argument('-file_ext',  
                         dest='file_ext', type=str, default='JPG', help='File extension')
-    parser.add_argument('-verbose', action='store_true', help='Run in verbose mode')
+    parser.add_argument('-response', '-response_required', 
+                        dest='response_required', action='store_true', help='Response required')
+    parser.add_argument('-verbose', '-verbose_mode', 
+                        dest='verbose_mode', action='store_true', help='Run in verbose mode')
 
     args = parser.parse_args()
 
@@ -518,7 +521,7 @@ if __name__ == "__main__":
     # # nms_thresh = 0.9
     # nms_thresh = 0.5
 
-    if args.verbose:
+    if args.verbose_mode:
         print('\nRoot dir = {}'.format(args.dir))
 
     print('\nInput directory = {}'.format(args.dir))
@@ -666,7 +669,8 @@ if __name__ == "__main__":
             # -----------------------------------------
             # Manually delete any images as needed!
             # -----------------------------------------
-            response = input("Delete any bad labeled frames from {} now...".format(current_data_dir))
+            if args.response_required:
+                response = input("Delete any bad labeled frames from {} now...".format(current_data_dir))
             # Remove images and labels from train/valid if they were deleted from rendered
             remove_bad_data(current_data_dir, args.file_ext)
 
