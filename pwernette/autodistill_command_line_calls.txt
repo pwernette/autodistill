@@ -1,0 +1,35 @@
+python pw_Auto_Distill.py -detect -dir /mnt/h/GrapeFinder/CabFranc_original -ont grapes -conf 0.30 -area 0.1 -response -bsize 8
+python pw_Auto_Distill.py -detect -dir /mnt/h/GrapeFinder/CabFranc_original -ont grapes -conf 0.35 -area 0.1 -response -bsize 8
+python pw_Auto_Distill.py -segment -dir /mnt/h/GrapeFinder/CabFranc_original -ont grapes -conf 0.30 -response
+python pw_Auto_Distill.py -segment -dir /mnt/h/GrapeFinder/CabFranc_original -ont grapes -conf 0.35 -response
+
+python pw_Auto_Distill.py -detect -dir /mnt/h/GrapeFinder/CabFranc_original -ont grapes -conf 0.4 -area 0.1 -response -bsize 8
+python pw_Auto_Distill.py -segment -dir /mnt/h/GrapeFinder/CabFranc_original -ont grapes -conf 0.4 -bsize 8 -response
+
+python pw_Auto_Distill.py -detect -dir /mnt/h/GrapeFinder/CabFranc_original -ont grapes -conf 0.45 -area 0.1 -response -bsize 8
+python pw_Auto_Distill.py -segment -dir /mnt/h/GrapeFinder/CabFranc_original -ont grapes -conf 0.45 -bsize 8 -response
+
+python pw_Auto_Distill.py -detect -dir /mnt/h/GrapeFinder/CabFranc_original -ont grapes -conf 0.5 -area 0.1 -response -bsize 8
+python pw_Auto_Distill.py -segment -dir /mnt/h/GrapeFinder/CabFranc_original -ont grapes -conf 0.5 -bsize 8 -response
+
+python pw_Auto_Distill.py -detect -dir /mnt/h/GrapeFinder/CabFranc_original -ont viticulture -conf 0.30 -response
+python pw_Auto_Distill.py -segment -dir /mnt/h/GrapeFinder/CabFranc_original -ont viticulture -conf 0.30 -bsize 8 -response
+
+python pw_Auto_Distill.py -detect -dir /mnt/h/GrapeFinder/CabFranc_original -ont viticulture -conf 0.50 -area 0.4
+python pw_Auto_Distill.py -segment -dir /mnt/h/GrapeFinder/CabFranc_original -ont viticulture -conf 0.50 -area 0.4 -bsize 8 -response
+
+
+
+python pw_Auto_Distill.py -detect -dir /mnt/h/GrapeFinder/CabFranc_original -ont grapes -conf 0.8 -area 0.1 -response -use_sahi -bsize 8
+python pw_Auto_Distill.py -segment -dir /mnt/h/GrapeFinder/CabFranc_original -ont grapes -conf 0.8 -area 0.1 -response -use_sahi -bsize 8
+python pw_Auto_Distill.py -detect -dir /mnt/h/GrapeFinder/CabFranc_original -ont grapes -conf 0.75 -area 0.1 -response -bsize 8
+
+python pw_Auto_Distill.py -segment -dir /mnt/h/GrapeFinder/CabFranc_original -ont grapes -conf 0.7 -area 0.1 -response -use_sahi -bsize 8
+
+
+
+python pw_Train_Model.py -rdir H:/GrapeFinder/CabFranc_original/Training_Data/GrapeMapper_segment_0.3_0.5_0.01_JPG -base yolov8
+python pw_Train_Model.py -rdir H:/GrapeFinder/CabFranc_original/Training_Data/GrapeMapper_segment_0.35_0.5_0.01_JPG -base yolov8
+python pw_Train_Model.py -rdir H:/GrapeFinder/CabFranc_original/Training_Data/GrapeMapper_segment_0.4_0.5_0.01_JPG -base yolov8
+python pw_Train_Model.py -rdir H:/GrapeFinder/CabFranc_original/Training_Data/GrapeMapper_segment_0.45_0.5_0.01_JPG -base yolov8
+python pw_Train_Model.py -rdir H:/GrapeFinder/CabFranc_original/Training_Data/GrapeMapper_segment_0.5_0.5_0.01_JPG -base yolov8
