@@ -1,0 +1,261 @@
+import os
+import argparse
+from PIL import Image
+from tqdm import tqdm
+
+import numpy as np
+
+import supervision as sv
+from supervision.detection.utils import *
+from ultralytics import YOLO
+# from autodistill_yolov8 import YOLOv8
+
+from pw_Auto_Distill import str_to_bool
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Functions
+# ----------------------------------------------------------------------------------------------------------------------
+def filter_detections(image, annotations, area_thresh_max, conf_thresh):
+    """
+
+    :param image:
+    :param annotations:
+    :param area_thresh_min:
+    :param area_thresh_max:
+    :param conf_thresh:
+    :return annotations:
+    """
+    # print('\nFiltering detection for {} with area:{}'.format(image, area_thresh))
+
+    # height, width = Image.open(filt_image).size
+    # print(image.shape)
+    height,width,_ = image.shape
+
+
+    # Filter by area (minimum and maximum)
+    # annotations = annotations[(annotations.box_area / (height * width)) > area_thresh_min]
+    annotations = annotations[(annotations.box_area / (height * width)) < area_thresh_max]
+
+    # Filter by confidence
+    # print(annotations.confidence)
+    annotations = annotations[annotations.confidence > conf_thresh]
+
+    return annotations
+
+def sanitize_class_ids(detections, fallback_id=0):
+    if detections.mask is None:
+        detections.class_id = np.array([], dtype=int)
+        return
+
+    num_masks = len(detections.mask)
+    class_ids = getattr(detections, "class_id", None)
+
+    if class_ids is None or len(class_ids) != num_masks:
+        detections.class_id = np.full((num_masks,), fallback_id, dtype=int)
+    else:
+        # Replace None or invalid entries
+        sanitized = []
+        for cid in class_ids:
+            try:
+                val = int(cid)
+                sanitized.append(val if val >= 0 else fallback_id)
+            except (TypeError, ValueError):
+                sanitized.append(fallback_id)
+        detections.class_id = np.array(sanitized, dtype=int)
+
+
+def process_dir(model_dir, input_dir, output_dir, task, owrite=False, model_weights_type='best', img_size=None, conf=0.3, iou=0.5, area_thresh_min=0.0, area_thresh_max=0.4, conf_thresh=0.1):
+    """
+    
+    :param model_dir:
+    :param input_dir:
+    :param output_dir:
+    :param task:
+    :param owrite:
+    :param model_weights_type:
+    :param img_size:
+    :param conf:
+    :param iou:
+    :return:
+    """
+
+    # Create the target directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    print(os.path.join(model_dir, 'weights', model_weights_type+'.pt'))
+    assert os.path.exists(os.path.join(model_dir, 'weights', model_weights_type+'.pt'))
+
+    # Load the model
+    try:
+        model = YOLO(os.path.join(model_dir, 'weights', model_weights_type+'.pt'))
+    except Exception as e:
+        print(f"ERROR: Could not load model!\n{e}")
+        return
+
+    if task == 'detect':
+        # Load the tracker
+        tracker = sv.ByteTrack()
+        # Create the annotator for detection
+        box_annotator = sv.BoxAnnotator()
+        # Adds label to annotation (tracking)
+        labeler = sv.LabelAnnotator()
+    elif task == 'segment':
+        # Create the annotators for segmentation
+        mask_annotator = sv.MaskAnnotator()
+        box_annotator = sv.BoxAnnotator()
+    else:
+        raise Exception("ERROR: Specify --task [detect, segment]")
+    
+    # Area threshold
+    area_thresh = 1.1
+
+    imgs = sv.list_files_with_extensions(directory=input_dir, extensions=["png", "PNG", "jpg", "JPG", "jpeg", "JPEG"])
+    print(f"\nFound {len(imgs)} images in {input_dir}")
+    
+    # get image dimensions
+    # if img_size is None:
+    #     img_size = Image.open(imgs[0]).size
+    # print('Using images with size: {}'.format(img_size))
+
+    # with sv.ImageSink(target_dir_path=output_dir, overwrite=owrite) as sink:
+    # Loop through all the images
+    for img in tqdm(imgs, total=len(imgs)):
+        with Image.open(img) as imag:
+            imag = np.array(imag)
+            # print(type(imag))
+            # Run the frame through the model and make predictions
+            result = model(imag,
+                            conf=0.1,
+                            iou=iou,
+                            # imgsz=img_size,
+                            half=True,
+                            augment=False,
+                            max_det=1000,
+                            verbose=False,
+                            show=False)[0]
+
+            # Version issues
+            result.obb = None
+
+            # Convert the results
+            detections = sv.Detections.from_ultralytics(result)
+
+            # Filter the detections
+            # print(f"Original annotations: {len(detections)}")
+            # detections = filter_detections(imag, detections, area_thresh_min, area_thresh_max, conf_thresh)
+            detections = filter_detections(imag, detections, area_thresh_max, conf_thresh)
+            # print(f"Remaining annotations after filtering: {len(detections)}")
+
+            if task == 'detect':
+                # Track the detections
+                detections = tracker.update_with_detections(detections)
+                labels = [f"#{tracker_id}" for tracker_id in detections.tracker_id]
+
+                # Create an annotated version of the frame (boxes)
+                annotated_img = box_annotator.annotate(scene=imag.copy(), detections=detections)
+                annotated_img = labeler.annotate(scene=annotated_img, detections=detections, labels=labels)
+            else:
+                # Create an annotated version of the frame (masks and boxes)
+                annotated_img = mask_annotator.annotate(scene=imag.copy(), detections=detections)
+                annotated_img = box_annotator.annotate(scene=annotated_img, detections=detections)
+
+        # convert the annotated image to a PIL image
+        if annotated_img.ndim == 2:
+            annotated_pil = Image.fromarray(annotated_img, mode='L')
+        elif annotated_img.ndim == 3 and annotated_img.shape[2] == 3:
+            annotated_pil = Image.fromarray(annotated_img, mode='RGB')
+        elif annotated_img.ndim == 3 and annotated_img.shape[2] == 4:
+            annotated_pil = Image.fromarray(annotated_img, mode='RGBA')
+        else:
+            raise ValueError(f"Unsupported image shape: {annotated_img.shape}")
+
+        # save the annotated image
+        annotated_pil.save(os.path.join(output_dir, os.path.basename(img)))
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------------------------------------------------------
+def main():
+    parser = argparse.ArgumentParser(description="Video Processing with YOLO and ByteTrack")
+
+    parser.add_argument('-m','-input_model','-inmodel','-model','-trained_model','-mod',
+                        dest='input_model',
+                        type=str,
+                        # required=True,
+                        default="/mnt/h/GrapeFinder_v2/2025-11-10_16-51-10_yolo11s-seg_GrapeMapper_segment_0.5_0.5_0.01_0.3_JPG",
+                        help="Path to the source weights file"
+                        )
+    parser.add_argument('-wt','-weights','-weightstype',
+                        dest='weights_type',
+                        type=str,
+                        choices=['best','last'],
+                        default='best',
+                        help="Source weights option [choices: best, last] [default: best]"
+                        )
+    parser.add_argument('-i','-input_dir','-indir','-idir','-inputdir','-in',
+                        dest='input_directory',
+                        type=str,
+                        # required=True,
+                        default="/mnt/d/sfm_greeen_2025harvest/20250926_oxley/photos_geotagged_3",
+                        help="Path to the directory of images (input)"
+                        )
+    parser.add_argument('-o','-output_dir','-outdir','-odir','-outputdir','-out',
+                        dest='output_directory',
+                        type=str,
+                        # required=True,
+                        default="/mnt/h/GrapeFinder_v2/2025-11-10_16-51-10_yolo11s-seg_GrapeMapper_segment_0.5_0.5_0.01_0.3_JPG/results",
+                        help="Path to the target video directory (output)"
+                        )
+    parser.add_argument('-t','-task',
+                        dest='task',
+                        type=str,
+                        choices=['detect','segment'],
+                        default='segment',
+                        help="Task to perform [choices: detect, segment]"
+                        )
+    parser.add_argument('-c','-conf','-confidence',
+                        dest='confidence',
+                        type=float,
+                        default=0.35,
+                        help="Confidence threshold for the model"
+                        )
+    parser.add_argument('-iou',
+                        dest='iou',
+                        type=float,
+                        default=0.3,
+                        help="IOU threshold for the model"
+                        )
+    parser.add_argument('-sahi',
+                        dest='sahi',
+                        action='store_true',
+                        help="Use SAHI"
+                        )
+    parser.add_argument('-owrite','-overwrite','-overwrite_output',
+                        dest='overwrite_output',
+                        action='store_true',
+                        help="Overwrite outputs [default = False]"
+                        )
+
+    args = parser.parse_args()
+
+    if not args.output_directory:
+        args.output_directory = os.path.join(args.input_directory, os.path.basename(args.input_model), "results")
+    
+    # print args to console
+    print("\nArguments:")
+    for arg in vars(args):
+        print(arg, ": ", getattr(args, arg))
+
+    process_dir(model_dir=args.input_model, 
+                input_dir=args.input_directory, 
+                output_dir=args.output_directory, 
+                task=args.task, 
+                owrite=args.overwrite_output, 
+                model_weights_type=args.weights_type, 
+                img_size=None, 
+                conf=args.confidence, 
+                iou=args.iou)
+
+if __name__ == "__main__":
+    main()

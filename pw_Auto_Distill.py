@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import cv2
 import numpy as np
 from PIL import Image
+from PIL.ExifTags import TAGS
 
 import supervision as sv
 from supervision.detection.utils import *
@@ -16,6 +17,8 @@ from autodistill import helpers
 from autodistill_grounded_sam import GroundedSAM
 from autodistill_grounding_dino import GroundingDINO
 from autodistill.detection import CaptionOntology
+import torch
+from torchvision.ops import box_iou
 
 
 
@@ -56,27 +59,167 @@ def str_to_bool(s):
 # ----------------------------------------------------------------------------------------------------------------------
 
 
-def non_max_suppression(predictions: np.ndarray, iou_threshold: float = 0.5) -> np.ndarray:
-  rows,_ = predictions.shape
+# def non_max_suppression(predictions: np.ndarray, iou_threshold: float = 0.5) -> np.ndarray:
+#   rows,_ = predictions.shape
 
-  sort_index = np.flip(predictions[:, 4].argsort())
-  predictions = predictions[sort_index]
+#   sort_index = np.flip(predictions[:, 4].argsort())
+#   predictions = predictions[sort_index]
 
-  boxes = predictions[:, :4]
-  categories = predictions[:, 4]
-  ious = box_iou_batch(boxes, boxes)
-  ious = ious - np.eye(rows)
+#   boxes = predictions[:, :4]
+#   if isinstance(boxes, np.ndarray):
+#     boxes = torch.from_numpy(boxes).float()
+#   elif not isinstance(boxes, torch.Tensor):
+#     boxes = torch.tensor(boxes, dtype=torch.float32)
 
-  keep = np.ones(rows, dtype=bool)
+#   categories = predictions[:, 4]
+#   ious = box_iou(boxes, boxes)
+#   ious = ious - np.eye(rows)
 
-  for index, (iou, category) in enumerate(zip(ious, categories)):
-      if not keep[index]:
-          continue
+#   keep = np.ones(rows, dtype=bool)
+#   if isinstance(keep, np.ndarray):
+#     keep = torch.from_numpy(keep).bool()
+#   condition = condition.bool()
 
-      condition = (iou > iou_threshold) & (categories == category)
-      keep = keep & ~condition
+#   for index, (iou, category) in enumerate(zip(ious, categories)):
+#       if not keep[index]:
+#           continue
 
-  return keep[sort_index.argsort()]
+#       condition = (iou > iou_threshold) & (categories == category)
+#       keep = keep & ~condition
+
+#   return keep[sort_index.argsort()]
+
+
+def non_max_suppression(
+    predictions,
+    iou_threshold: float = 0.5,
+    image_shape=None,
+    min_area: float = 0.0,
+    max_area: float = 1.0,
+) -> list:
+
+    """
+    predictions: [N,5] -> [x1, y1, x2, y2, score]
+    iou_threshold: NMS IoU
+    image_shape: (H, W) required if min_area/max_area filtering is used
+    min_area/max_area: box area fraction relative to full image
+
+    Returns list of indices (relative to the original predictions array) to keep.
+    """
+
+    # Ensure numpy array
+    predictions = np.array(predictions)
+    if predictions.size == 0:
+        return []
+
+    N = predictions.shape[0]
+    orig_indices = np.arange(N)
+
+    # ---------- Area Filtering (optional) ----------
+    if image_shape is not None and (min_area > 0.0 or max_area < 1.0):
+        # image_shape may be (H, W) or (H, W, C)
+        if len(image_shape) == 3:
+            H, W, _ = image_shape
+        elif len(image_shape) == 2:
+            H, W = image_shape
+        else:
+            raise ValueError("image_shape must be (H,W) or (H,W,C)")
+        img_area = float(H) * float(W)
+
+        boxes_xyxy = predictions[:, :4]
+        box_w = boxes_xyxy[:, 2] - boxes_xyxy[:, 0]
+        box_h = boxes_xyxy[:, 3] - boxes_xyxy[:, 1]
+        box_area = box_w * box_h
+        area_frac = box_area / img_area
+
+        area_mask = (area_frac >= float(min_area)) & (area_frac <= float(max_area))
+    else:
+        area_mask = np.ones(N, dtype=bool)
+
+    # Filter predictions and track original indices
+    filtered_preds = predictions[area_mask]
+    filtered_orig_idx = orig_indices[area_mask]
+
+    if filtered_preds.shape[0] == 0:
+        return []
+
+    # ---------- Continue With NMS on filtered predictions ----------
+    # Sort by score descending
+    sort_index = np.flip(filtered_preds[:, 4].argsort())
+    preds_sorted = filtered_preds[sort_index]
+    orig_sorted_idx = filtered_orig_idx[sort_index]
+
+    boxes = preds_sorted[:, :4]
+    scores = preds_sorted[:, 4]
+
+    if isinstance(boxes, np.ndarray):
+        boxes_t = torch.from_numpy(boxes).float()
+    elif isinstance(boxes, torch.Tensor):
+        boxes_t = boxes.float()
+    else:
+        boxes_t = torch.tensor(boxes, dtype=torch.float32)
+
+    if isinstance(scores, np.ndarray):
+        scores_t = torch.from_numpy(scores).float()
+    elif isinstance(scores, torch.Tensor):
+        scores_t = scores.float()
+    else:
+        scores_t = torch.tensor(scores, dtype=torch.float32)
+
+    keep_local = []
+    idxs = scores_t.argsort(descending=True)
+    while idxs.numel() > 0:
+        current = idxs[0]
+        keep_local.append(int(current.item()))
+        if idxs.numel() == 1:
+            break
+        rest = idxs[1:]
+        ious = box_iou(boxes_t[current].unsqueeze(0), boxes_t[rest]).squeeze(0)
+        idxs = rest[ious <= iou_threshold]
+
+    # Map kept local indices (relative to preds_sorted) back to original predictions indices
+    # preds_sorted was built from filtered_preds[sort_index], so map: orig_sorted_idx[keep_local]
+    keep_global = [int(orig_sorted_idx[i]) for i in keep_local]
+
+    return keep_global
+
+
+# def non_max_suppression(predictions, iou_threshold=0.5) -> np.ndarray:
+#     """
+#     boxes: Tensor[N, 4] in [x1, y1, x2, y2] format
+#     scores: Tensor[N]
+#     iou_thresh: float
+#     Returns: indices of boxes to keep
+#     """
+#     rows,_ = predictions.shape
+
+#     sort_index = np.flip(predictions[:, 4].argsort())
+#     predictions = predictions[sort_index]
+
+#     boxes = predictions[:, :4]
+#     scores = predictions[:, 4]
+
+#     if isinstance(boxes, np.ndarray):
+#         boxes = torch.from_numpy(boxes).float()
+#     if isinstance(scores, np.ndarray):
+#         scores = torch.from_numpy(scores).float()
+
+#     keep = []
+#     idxs = scores.argsort(descending=True)
+
+#     while idxs.numel() > 0:
+#         current = idxs[0]
+#         keep.append(current.item())
+
+#         if idxs.numel() == 1:
+#             break
+
+#         rest = idxs[1:]
+#         ious = box_iou(boxes[current].unsqueeze(0), boxes[rest]).squeeze(0)
+#         idxs = rest[ious <= iou_threshold]
+
+#     # print("🔍 keep:", keep)
+#     return keep
 
 def extract_frames_from_video(video_path, image_dir, start_ratio=.15, end_ratio=.85, frame_stride=15):
     """
@@ -192,12 +335,13 @@ def batch_and_copy_images(source_folder, output_folder, batch_size=64, file_ext=
     print('Batched data saved in {}.\n'.format(output_folder_base))
 
 
-def filter_detections(image, annotations, area_thresh, conf_thresh):
+def filter_detections(image, annotations, area_thresh_min, area_thresh_max, conf_thresh):
     """
 
     :param image:
     :param annotations:
-    :param area_thresh:
+    :param area_thresh_min:
+    :param area_thresh_max:
     :param conf_thresh:
     :return annotations:
     """
@@ -207,8 +351,9 @@ def filter_detections(image, annotations, area_thresh, conf_thresh):
     # print(image.shape)
     height,width,_ = image.shape
 
-    # Filter by area
-    annotations = annotations[(annotations.box_area / (height * width)) < area_thresh]
+    # Filter by area (minimum and maximum)
+    annotations = annotations[(annotations.box_area / (height * width)) > area_thresh_min]
+    annotations = annotations[(annotations.box_area / (height * width)) < area_thresh_max]
 
     # Filter by confidence
     # print(annotations.confidence)
@@ -216,8 +361,130 @@ def filter_detections(image, annotations, area_thresh, conf_thresh):
 
     return annotations
 
+def sanitize_class_ids(detections, fallback_id=0):
+    if detections.mask is None:
+        detections.class_id = np.array([], dtype=int)
+        return
 
-def render_dataset(dataset, output_dir, include_boxes=True, include_masks=False):
+    num_masks = len(detections.mask)
+    class_ids = getattr(detections, "class_id", None)
+
+    if class_ids is None or len(class_ids) != num_masks:
+        detections.class_id = np.full((num_masks,), fallback_id, dtype=int)
+    else:
+        # Replace None or invalid entries
+        sanitized = []
+        for cid in class_ids:
+            try:
+                val = int(cid)
+                sanitized.append(val if val >= 0 else fallback_id)
+            except (TypeError, ValueError):
+                sanitized.append(fallback_id)
+        detections.class_id = np.array(sanitized, dtype=int)
+
+def filter_detections_by_indices(detections, keep, task='segment'):
+    def safe_slice(attr):
+        return [attr[i] for i in keep] if attr is not None else []
+
+    xyxy = np.array(safe_slice(detections.xyxy)).reshape(-1, 4)
+
+    # if task == 'segment':
+    mask = np.array([detections.mask[i] for i in keep]) if detections.mask is not None else None
+        
+    confidence = np.array(safe_slice(detections.confidence)) if detections.confidence is not None else None
+    class_id = np.array(safe_slice(detections.class_id)) if detections.class_id is not None else np.zeros(len(keep), dtype=int)
+    tracker_id = np.array(safe_slice(detections.tracker_id)) if detections.tracker_id is not None else None
+
+    data = {k: [v[i] for i in keep] for k, v in detections.data.items()} if detections.data else {}
+
+    # if task == 'detect':
+    return sv.Detections(
+        xyxy=xyxy,
+        mask=mask,
+        confidence=confidence,
+        class_id=class_id,
+        tracker_id=tracker_id,
+        data=data,
+        metadata=detections.metadata
+    )
+    # else:
+    #     return sv.Detections(
+    #         xyxy=xyxy,
+    #         confidence=confidence,
+    #         class_id=class_id,
+    #         tracker_id=tracker_id,
+    #         data=data,
+    #         metadata=detections.metadata
+    #     )
+
+# def filter_invalid_class_ids(detections):
+#     valid_indices = [
+#         i for i, cid in enumerate(detections.class_id)
+#         if isinstance(cid, (int, np.integer)) and cid is not None and cid >= 0
+#     ]
+
+#     # Slice all fields by valid indices
+#     return sv.Detections(
+#         xyxy=np.array([detections.xyxy[i] for i in valid_indices]).reshape(-1, 4),
+#         mask=np.array([detections.mask[i] for i in valid_indices]) if detections.mask is not None else None,
+#         confidence=np.array([detections.confidence[i] for i in valid_indices]) if detections.confidence is not None else None,
+#         class_id=np.array([detections.class_id[i] for i in valid_indices], dtype=int),
+#         tracker_id=np.array([detections.tracker_id[i] for i in valid_indices]) if detections.tracker_id is not None else None,
+#         data={k: [v[i] for i in valid_indices] for k, v in detections.data.items()} if detections.data else {},
+#         metadata=detections.metadata
+#     )
+
+def filter_invalid_class_ids(detections):
+    valid_indices = [
+        i for i, cid in enumerate(detections.class_id)
+        if isinstance(cid, (int, np.integer)) and cid is not None and cid >= 0
+    ]
+    
+    # --- FIX START ---
+    num_valid = len(valid_indices)
+    
+    # 1. Handle XYXY: Ensure it's a (N, 4) array.
+    xyxy_filtered = np.array([detections.xyxy[i] for i in valid_indices]).reshape(-1, 4)
+    
+    # 2. Handle Mask: Correctly shape the empty mask array if no detections remain.
+    mask_filtered = None
+    if detections.mask is not None:
+        if num_valid > 0:
+            mask_filtered = np.array([detections.mask[i] for i in valid_indices])
+        else:
+            # If mask is present but valid_indices is empty, create an empty 3D array (0, H, W).
+            # We can't know H, W here, but using np.empty((0, 0, 0)) often works for 
+            # supervision/numpy arrays where the first dimension is 0. 
+            # However, for safety against the ValueError, we'll try to match the expected empty shape.
+            # supervision's internal logic expects (0, H, W). A generic (0, 0, 0) often passes.
+            mask_filtered = np.empty((0, 0, 0), dtype=bool) 
+            # Alternatively: mask_filtered = np.array([detections.mask[i] for i in valid_indices], dtype=bool).reshape((0,0,0))
+    # --- FIX END ---
+
+    # Slice all other fields by valid indices
+    return sv.Detections(
+        xyxy=xyxy_filtered,
+        mask=mask_filtered,
+        confidence=np.array([detections.confidence[i] for i in valid_indices]) if detections.confidence is not None else None,
+        class_id=np.array([detections.class_id[i] for i in valid_indices], dtype=int),
+        tracker_id=np.array([detections.tracker_id[i] for i in valid_indices]) if detections.tracker_id is not None else None,
+        data={k: [v[i] for i in valid_indices] for k, v in detections.data.items()} if detections.data else {},
+        metadata=detections.metadata
+    )
+
+def rebuild_detections(d):
+    N = len(d.mask)
+    return sv.Detections(
+        xyxy=np.array(d.xyxy[:N]).reshape(-1, 4),
+        mask=np.array(d.mask[:N]),
+        class_id=np.array(d.class_id[:N], dtype=int),
+        confidence=np.array(d.confidence[:N]) if d.confidence is not None else None,
+        tracker_id=np.array(d.tracker_id[:N]) if d.tracker_id is not None else None,
+        data={k: v[:N] for k, v in d.data.items()} if d.data else {},
+        metadata=d.metadata
+    )
+
+def render_dataset(dataset, output_dir, class_map=None, include_boxes=True, include_masks=False, col_map=None):
     """
 
     :param dataset:
@@ -226,31 +493,81 @@ def render_dataset(dataset, output_dir, include_boxes=True, include_masks=False)
     :param include_masks:
     :return:
     """
-    # Images
-    # image_names = list(dataset.images.keys())
 
     # Create the annotation object
-    mask_annotator = sv.MaskAnnotator()
-    box_annotator = sv.BoxAnnotator()
+    mask_annotator = sv.MaskAnnotator(color_lookup=sv.ColorLookup.CLASS)
+    box_annotator = sv.BoxAnnotator(color_lookup=sv.ColorLookup.CLASS)
+    # mask_annotator = sv.MaskAnnotator()
+    # box_annotator = sv.BoxAnnotator()
 
     with sv.ImageSink(target_dir_path=output_dir, overwrite=False) as sink:
         for path, imag, annot in dataset:
-        # for i_idx, image_name in enumerate(image_names):
-
-            # Get the images and annotation
-            # image = dataset.images[image_name]
-            # annotations = dataset.annotations[image_name]
+            # print("🔍 Detections keys:", annot.__dict__.keys())
+            # print("🔍 class_id:", getattr(annot, "class_id", None))
+            # print("🔍 mask count:", len(getattr(annot, "mask", [])))
+            
+            # Read the original EXIF data
+            try:
+                original_image_pil = Image.open(path)
+                exif_data = original_image_pil.info.get('exif') # Get raw EXIF byte data
+            except Exception as e:
+                print(f"Warning: Could not read or extract EXIF from {path}. Error: {e}")
+                exif_data = None
+            
+            # Remove invalid class_ids
+            annot = filter_invalid_class_ids(annot)
 
             if include_boxes:
                 # Get the boxes for the annotations
                 imag = box_annotator.annotate(scene=imag, detections=annot)
 
             if include_masks:
+                if "class_id" in annot.data:
+                    del annot.data["class_id"]
+                if "color" in annot.data:
+                    del annot.data["color"]
+
+                sanitize_class_ids(annot)
+
+                annot.class_id = np.array([
+                    0 if cid is None or not isinstance(cid, (int, np.integer)) or cid < 0 else int(cid)
+                    for cid in annot.class_id
+                ], dtype=int)
+                
+                # print("✅ Final class_id:", annot.class_id)
+                # print("✅ Type:", type(annot.class_id), "Shape:", annot.class_id.shape)
+                # print("🧪 About to annotate:")
+                # print("class_id:", annot.class_id)
+                # print("type:", type(annot.class_id))
+                # print("contains None:", any(cid is None for cid in annot.class_id))
+                # print("contains invalid:", any(not isinstance(cid, (int, np.integer)) or cid < 0 for cid in annot.class_id))
+                
+                annot = rebuild_detections(annot)
+                
+                # print("🔍 Final sanity check:")
+                # print("xyxy:", len(annot.xyxy))
+                # print("mask:", len(annot.mask))
+                # print("class_id:", len(annot.class_id))
+                # print("confidence:", len(annot.confidence) if annot.confidence is not None else "None")
+                
                 # Get the masks for the annotations
                 imag = mask_annotator.annotate(scene=imag, detections=annot)
 
             # output_file = os.path.basename(image_name)
             output_file = os.path.basename(path)
+
+            # Convert the annotated NumPy array (imag) to a PIL image
+            # annotated_pil = Image.fromarray(cv2.cvtColor(imag, cv2.COLOR_BGR2RGB))
+            
+            # Save the image, passing the original EXIF data
+            # try:
+            #     if exif_data is not None:
+            #         annotated_pil.save(output_file, exif=exif_data)
+            #     else:
+            #         annotated_pil.save(output_file)
+            # except Exception as e:
+            #     print(f"Error saving image with EXIF: {output_file}. Falling back to standard save. Error: {e}")
+            #     # annotated_pil.save(output_file)
             sink.save_image(image=imag, image_name=output_file)
 
 
@@ -279,11 +596,11 @@ def remove_bad_data(data_dir, fileext='JPG'):
     # Get all the training images and labels paths
     train_images = glob.glob(os.path.join(train_dir,"images","*."+fileext))
     train_labels = glob.glob(os.path.join(train_dir,"labels","*.txt"))
-    print('found {} train images in {}'.format(len(train_images),os.path.join(train_dir,"images")))
+    # print('found {} train images in {}'.format(len(train_images),os.path.join(train_dir,"images")))
 
     for img, lab in zip(train_images, train_labels):
         basename = os.path.basename(img).split(".")[0]
-        print('training image: {}'.format(basename))
+        # print('training image: {}'.format(basename))
         combined_dict[basename] = {
             "image": img,
             "label": lab
@@ -302,22 +619,23 @@ def remove_bad_data(data_dir, fileext='JPG'):
         }
 
     # Get the rendered images
+    print(os.path.join(render_dir,"*."+fileext))
     render_images = glob.glob(os.path.join(render_dir,"*."+fileext))
-    print('found {} rendered images in {}'.format(len(render_images),render_dir))
+    # print('found {} rendered images in {}'.format(len(render_images),render_dir))
 
-    print('combined_dict {}'.format(combined_dict))
+    # print('combined_dict {}'.format(combined_dict))
 
-    print('pre-filter: combined_dict length = {}'.format(len(combined_dict)))
+    # print('pre-filter: combined_dict length = {}'.format(len(combined_dict)))
 
     # Loop through the rendered images and removes those that
     # exist from the combined dictionary.
     for render_image in render_images:
         basename = os.path.basename(render_image).split(".")[0]
-        print('rendered image: {}'.format(basename))
+        # print('rendered image: {}'.format(basename))
         if basename in combined_dict:
             combined_dict.pop(basename)
     
-    print('post-filter: combined_dict length = {}'.format(len(combined_dict)))
+    # print('post-filter: combined_dict length = {}'.format(len(combined_dict)))
 
     # Finally, loop though the remaining image / labels,
     # representing the bad data, and delete them.
@@ -336,14 +654,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Video Processing with YOLO and ByteTrack")
 
     parser.add_argument('-dir',  
-                        dest='dir', type=str, help='Directory to process')
+                        dest='dir', type=str, default='/mnt/d/sfm_greeen_2025harvest/20250926_oxley/for_annotation', help='Directory to process')
     parser.add_argument('-ont',  
-                        dest='ont', type=str, choices=['grapes','rocks','mussels','fish','shells','trees','viticulture'], default='grapes', 
+                        dest='ont', type=str, choices=['grape','grapes','green grapes','riesling','rocks','mussels','fish','shells','trees','viticulture'], default='grape', 
                         help='Ontology to use')
     parser.add_argument('-detect', action='store_true', help='Detect objects')
-    parser.add_argument('-segment', action='store_true', help='Segment objects')
-    parser.add_argument('-area','-area_thresh',  
-                        dest='area_thresh', type=float, default=0.01, help='Area threshold for detections')
+    parser.add_argument('-segment', action='store_true', default=True, help='Segment objects')
+    parser.add_argument('-amin','-areamin','-area_thresh_min',  
+                        dest='area_threshold_minimum', type=float, default=0.01, help='Minimum area threshold for detections')
+    parser.add_argument('-amax','-areamax','-area_thresh_max',
+                        dest='area_threshold_maximum', type=float, default=0.3, help='Maximum area threshold for detections')
     parser.add_argument('-conf','-conf_thresh',  
                         dest='conf_thresh', type=float, default=0.35, help='Confidence threshold for detections')
     parser.add_argument('-nms','-nms_thresh',  
@@ -385,8 +705,87 @@ if __name__ == "__main__":
 
     # Set up the labeling ontology
     ont_dict = {
+        'coastal': CaptionOntology({
+            "rock": "rock",
+            "tiny rock": "rock",
+            "small rock": "rock",
+            "big rock": "rock",
+            "fuzzy rock": "rock",
+            "smooth rock": "rock",
+            "person": "person",
+            "people": "person",
+            "umbrella": "umbrella",
+            "umbrellas": "umbrella",
+            "grass": "grass",
+            "grasses": "grass",
+            "wave": "wave",
+            "waves": "wave",
+            "big wave": "wave",
+            "small wave": "wave",
+            "white water": "breaking wave",
+            "breaking wave": "breaking wave",
+            "waves breaking": "breaking wave",
+            "wave breaking": "breaking wave",
+            "breaking waves": "breaking wave",
+            "white water wave": "breaking wave",
+            "chair": "chair",
+            "chairs": "chair",
+        }),
+        'grape': CaptionOntology({
+            "grape": "grape",
+            "grapes": "grape",
+            "fuzzy grape": "grape",
+            "fuzzy grape cluster": "grape",
+            "grape cluster": "grape",
+            "purple grape": "grape",
+            "purple grape cluster": "grape",
+            "purple grapes": "grape",
+            "red grape": "grape",
+            "red grape cluster": "grape",
+            "red grapes": "grape",
+        }),
         'grapes': CaptionOntology({
-            "grapes": "grapes",
+            "grapes": "grape",
+        }),
+        'green grapes': CaptionOntology({
+            "green grape": "grape",
+            "green grapes": "grape",
+            "green grape cluster": "grape",
+            "green grape bunch": "grape",
+            "green grape bunches": "grape",
+            "green grape bunch cluster": "grape",
+            "fuzzy green grape": "grape",
+            "fuzzy green grapes": "grape",
+        }),
+        'riesling': CaptionOntology({
+            "riesling": "riesling",
+            "riesling cluster": "riesling",
+            "fuzzy riesling": "riesling",
+            "fuzzy riesling cluster": "riesling",
+            "green grapes": "riesling",
+            "green grape": "riesling",
+            "green grape cluster": "riesling",
+            "green grape bunch": "riesling",
+            "green grape bunches": "riesling",
+            "green grape bunch cluster": "riesling",
+            "fuzzy green grape": "riesling",
+            "fuzzy green grapes": "riesling",
+            "fuzzy green grape cluster": "riesling",
+            "grape": "riesling",
+            "grapes": "riesling",
+            "grape cluster": "riesling",
+            "fuzzy grape": "riesling",
+            "fuzzy grape cluster": "riesling",
+            "fuzzy grapes": "riesling",
+            "yellow grape": "riesling",
+            "yellow grapes": "riesling",
+            "yellow grape cluster": "riesling",
+            "yellow grape bunch": "riesling",
+            "yellow grape bunches": "riesling",
+            "yellow grape bunch cluster": "riesling",
+            "fuzzy yellow grape": "riesling",
+            "fuzzy yellow grapes": "riesling",
+            "fuzzy yellow grape cluster": "riesling",
         }),
         'rocks': CaptionOntology({
             "rock": "rock",
@@ -456,8 +855,37 @@ if __name__ == "__main__":
         }),
     }
 
+    # cmap = {
+    #     "grape": sv.Color(255, 0, 0),     # Red
+    #     "foliage": sv.Color(0, 255, 0),   # Green
+    #     "sky": sv.Color(0, 0, 255),       # Blue
+    #     "stem": sv.Color(255, 255, 0),    # Cyan
+    # }
+
+    cmap = {
+        0: sv.Color(255, 0, 0),     # Red
+        1: sv.Color(0, 255, 0),   # Green
+        2: sv.Color(0, 0, 255),       # Blue
+        3: sv.Color(255, 255, 0),    # Cyan
+    }
+
+    # coastal_labels = set(ont_dict['coastal'].values())
+    coastal_cmap = {
+        0: sv.Color(128, 64, 64),           # Brownish
+        1: sv.Color(255, 192, 203),       # Pink
+        2: sv.Color(255, 165, 0),       # Orange
+        3: sv.Color(0, 128, 0),            # Dark Green
+        4: sv.Color(0, 191, 255),           # Deep Sky Blue
+        5: sv.Color(135, 206, 250),# Light Sky Blue
+        6: sv.Color(160, 82, 45),          # Saddle Brown
+    }
+
     model_name_dict = {
+        'coastal': "CoastalMapper",
+        'grape': "GrapeMapper",
         'grapes': "GrapeMapper",
+        'green grapes': "GrapeMapper_green",
+        'riesling': "GrapeMapper_riesling",
         'rocks': "RockMapper",
         'mussels': "MusselMapper",
         'fish': "FishMapper",
@@ -521,6 +949,39 @@ if __name__ == "__main__":
     # # nms_thresh = 0.9
     # nms_thresh = 0.5
 
+    # print('615 ontology_values: ', dict(ont_dict[args.ont].promptMap).values())
+
+    # # Build a unified class_id map
+    # class_name_to_id = {}
+    # next_id = 0
+    # for class_name in set(dict(ont_dict[args.ont].promptMap).values()):
+    #     class_name_to_id[class_name] = next_id
+    #     next_id += 1
+    # print('623 class_name_to_id: ', class_name_to_id)
+
+    # # Build a unified caption_to_id map
+    # caption_to_id = {
+    #     caption: class_name_to_id[class_name]
+    #     for caption, class_name in dict(ont_dict[args.ont].promptMap).items()
+    # }
+    # print('630 caption_to_id: ', caption_to_id)
+
+    ordered_captions = list(dict(ont_dict[args.ont].promptMap).keys())
+
+    # class name → unified ID
+    class_name_to_id = {}
+    next_id = 0
+    for class_name in set(dict(ont_dict[args.ont].promptMap).values()):
+        class_name_to_id[class_name] = next_id
+        next_id += 1
+
+    # caption → unified ID
+    caption_to_id = {
+        caption: class_name_to_id[class_name]
+        for caption, class_name in dict(ont_dict[args.ont].promptMap).items()
+    }
+
+
     if args.verbose_mode:
         print('\nRoot dir = {}'.format(args.dir))
 
@@ -562,9 +1023,9 @@ if __name__ == "__main__":
     # merging them together right before training the model
 
     if args.use_sahi:
-        dataset_name = model_name_dict[args.ont]+'_'+mode+'_'+str(args.conf_thresh)+'_'+str(args.nms_thresh)+'_'+str(args.area_thresh)+"_sahi_"+args.file_ext
+        dataset_name = model_name_dict[args.ont]+'_'+mode+'_'+str(args.conf_thresh)+'_'+str(args.nms_thresh)+'_'+str(args.area_threshold_minimum)+'_'+str(args.area_threshold_maximum)+"_sahi_"+args.file_ext
     else:
-        dataset_name = model_name_dict[args.ont]+'_'+mode+'_'+str(args.conf_thresh)+'_'+str(args.nms_thresh)+'_'+str(args.area_thresh)+"_"+args.file_ext
+        dataset_name = model_name_dict[args.ont]+'_'+mode+'_'+str(args.conf_thresh)+'_'+str(args.nms_thresh)+'_'+str(args.area_threshold_minimum)+'_'+str(args.area_threshold_maximum)+"_"+args.file_ext
 
     # The directory for the current dataset being created
     # current_data_dir = os.path.join(training_data_dir, dataset_name)
@@ -582,12 +1043,15 @@ if __name__ == "__main__":
     # image_paths = sv.list_files_with_extensions(directory=input_dir, extensions=["png", "jpg", "jpeg"])
     # print('\nFound {} images'.format(len(image_paths)))
 
+
+
+
+
     if CREATE_LABELS:
         # Make copies of the extracted frames, make in batches of N
         # This has to be done because the auto labeler is RAM heavy
         batch_and_copy_images(args.dir, batched_dir, batch_size=args.bsize, file_ext=args.file_ext)
         temporary_image_folders = glob.glob(f"{batched_dir}/images_*")
-        # temporary_image_folders = [batched_dir]
         print("Batch Folders Found: ", len(temporary_image_folders))
 
         if args.detect:
@@ -604,6 +1068,7 @@ if __name__ == "__main__":
             base_model = GroundedSAM(ontology=ont_dict[args.ont],
                                      box_threshold=args.conf_thresh,
                                      text_threshold=args.conf_thresh)
+            
             # For rendering
             include_boxes = False
             include_masks = True
@@ -616,62 +1081,248 @@ if __name__ == "__main__":
                                        extension="."+args.file_ext,
                                        output_folder=auto_labeled_dir,
                                        sahi=args.use_sahi)
-            # print(len(list(dataset.images.keys())))
-            # Delete the temporary copies
-            # shutil.rmtree(temporary_image_folder)
-
-            # Filter the dataset
-            # print(len(dataset))
-
-            # for image_name in tqdm(image_names):
+            
+            # --- LABEL FILTERING AND NMS (Existing Logic) ---
+            
+            # 1. Remap class_id using captions for filtering
+            ordered_captions = list(dict(ont_dict[args.ont].promptMap).keys())
             for path, image, annotations in dataset:
-                # numpy arrays for this image
-                class_id = annotations.class_id
+                annotations.class_id = [
+                    caption_to_id.get(ordered_captions[cid], 0)
+                    for cid in annotations.class_id
+                ]
 
-                # Filter based on area and confidence (removes large and unconfident)
-                if args.detect:
-                    annotations = filter_detections(image, annotations, area_thresh=args.area_thresh, conf_thresh=args.conf_thresh)
-
-                # Filter based on NMS (removes all the duplicates, faster than with_nms)
+                # 3. Filter based on NMS
                 predictions = np.column_stack((annotations.xyxy, annotations.confidence))
-                indices = non_max_suppression(predictions, args.nms_thresh)
-                if len(indices) > 0:
-                    annotations = annotations[indices]
-                    # annotations = annotations
-                    annotations.class_id = np.zeros_like(class_id)
+                indices = non_max_suppression(predictions, args.nms_thresh, image_shape=image.shape, min_area=args.area_threshold_minimum, max_area=args.area_threshold_maximum)
+
+                # If no indices kept, clear annotations in-place
+                if len(indices) == 0:
+                    # Ensure annotations object is emptied so dataset consumers see the change
+                    annotations.xyxy = np.empty((0, 4))
+                    annotations.mask = None
+                    annotations.confidence = np.array([])
+                    annotations.class_id = np.array([], dtype=int)
+                    annotations.tracker_id = None
+                    annotations.data = {}
                 else:
-                    annotations = None
-                    
-            # Change the dataset classes
+                    # Get filtered detections
+                    if args.detect:
+                        filtered = filter_detections_by_indices(annotations, indices, task='detect')
+                    else:
+                        filtered = filter_detections_by_indices(annotations, indices, task='segment')
+
+                    # Mutate the existing annotations object so dataset reflects changes
+                    annotations.xyxy = np.array(filtered.xyxy).reshape(-1, 4) if filtered.xyxy is not None else np.empty((0, 4))
+                    annotations.mask = np.array(filtered.mask) if getattr(filtered, 'mask', None) is not None else None
+                    annotations.confidence = np.array(filtered.confidence) if getattr(filtered, 'confidence', None) is not None else np.array([])
+                    annotations.class_id = np.array(filtered.class_id, dtype=int) if getattr(filtered, 'class_id', None) is not None else np.array([], dtype=int)
+                    annotations.tracker_id = np.array(filtered.tracker_id) if getattr(filtered, 'tracker_id', None) is not None else None
+                    annotations.data = filtered.data if getattr(filtered, 'data', None) else {}
+            
+            # 4. Final Class ID Sanity Check/Remapping
             if len(set(dataset.classes)) == 1:
                 dataset.classes = [f'{dataset_name}']
 
-            if SAVE_LABELS:
-                # Save the filtered dataset (this is used for training)
-                dataset.as_yolo(current_data_dir + "/images",
-                                current_data_dir + "/annotations",
-                                min_image_area_percentage=0.01,
-                                data_yaml_path=current_data_dir + "/data.yaml")
+            for _, _, detections in dataset:
+                if hasattr(detections, "data") and "caption" in detections.data:
+                    captions = detections.data["caption"]
+                    detections.class_id = [caption_to_id.get(caption, 0) for caption in captions]
 
-            # Display the filtered dataset
+            # --- END LABEL FILTERING ---
+
+            # 5. Save the filtered dataset to the YOLO structure (pre-split)
+            if SAVE_LABELS:
+                dataset.as_yolo(os.path.join(current_data_dir, "images"),
+                                os.path.join(current_data_dir, "annotations"),
+                                min_image_area_percentage=0.01,
+                                data_yaml_path=os.path.join(current_data_dir, "data.yaml"))
+
+            # 6. Display the filtered dataset (renders images)
             render_dataset(dataset,
                            rendered_data_dir,
+                           class_map=caption_to_id,
                            include_boxes=include_boxes,
-                           include_masks=include_masks)
+                           include_masks=include_masks,
+                           col_map=cmap)
+            
+            # --- PAUSE, REVIEW, AND CLEAN (New/Reorganized Logic) ---
+            
+            # 7. Split the filtered dataset into training / valid.
+            # This creates the train/valid folders that `remove_bad_data` expects.
+            if SAVE_LABELS:
+                print("\nSplitting data for quality check...")
+                if args.detect:
+                    helpers.split_data(current_data_dir, record_confidence=True, file_extension=args.file_ext)
+                else:
+                    helpers.split_data(current_data_dir, record_confidence=False, file_extension=args.file_ext)
+            
+            # Delete the temporary copies from the batch folder
+            print(f"Deleting temporary image folder: {temporary_image_folder}")
+            shutil.rmtree(temporary_image_folder)
 
+        # 8. PAUSE for manual review
+        if args.response_required:
+            input_prompt = (
+                f"\n**************************************************************\n"
+                f"ACTION REQUIRED: Please review the rendered images in:\n"
+                f"    Rendered Folder: {rendered_data_dir}\n"
+                f"-> DELETE any unwanted image/annotation files from this FOLDER.\n"
+                f"The script will automatically remove corresponding files from\n"
+                f"the 'train' and 'valid' folders based on what you delete here.\n"
+                f"Press ENTER to continue after cleanup...\n"
+                f"**************************************************************\n"
+            )
+            input(input_prompt)
+
+        # 9. Clean up the data based on what was deleted from the rendered folder
         if SAVE_LABELS:
-            # Split the filtered dataset into training / valid
-            if args.detect:
-                helpers.split_data(current_data_dir, record_confidence=True, file_extension=args.file_ext)
-            else:
-                helpers.split_data(current_data_dir, record_confidence=False, file_extension=args.file_ext)
-
-            # -----------------------------------------
-            # Manually delete any images as needed!
-            # -----------------------------------------
-            if args.response_required:
-                response = input("Delete any bad labeled frames from {} now...".format(current_data_dir))
-            # Remove images and labels from train/valid if they were deleted from rendered
+            print("\nCleaning up training/validation data based on deleted rendered files...")
             remove_bad_data(current_data_dir, args.file_ext)
 
+        # Remove the main temporary batch directory when done with all batches
+        if os.path.exists(batched_dir):
+            shutil.rmtree(batched_dir)
+            
     print("Done.")
+
+
+
+
+
+
+    # if CREATE_LABELS:
+    #     # Make copies of the extracted frames, make in batches of N
+    #     # This has to be done because the auto labeler is RAM heavy
+    #     batch_and_copy_images(args.dir, batched_dir, batch_size=args.bsize, file_ext=args.file_ext)
+    #     temporary_image_folders = glob.glob(f"{batched_dir}/images_*")
+    #     # temporary_image_folders = [batched_dir]
+    #     print("Batch Folders Found: ", len(temporary_image_folders))
+
+    #     if args.detect:
+    #         # Initialize the foundational base model, set the thresholds
+    #         base_model = GroundingDINO(ontology=ont_dict[args.ont],
+    #                                    box_threshold=args.conf_thresh,
+    #                                    text_threshold=args.conf_thresh)
+    #         # For rendering
+    #         include_boxes = True
+    #         include_masks = False
+
+    #     else:
+    #         # Initialize the foundational base model, set the thresholds
+    #         base_model = GroundedSAM(ontology=ont_dict[args.ont],
+    #                                  box_threshold=args.conf_thresh,
+    #                                  text_threshold=args.conf_thresh)
+            
+    #         # For rendering
+    #         include_boxes = False
+    #         include_masks = True
+
+    #     # Loop through the temp folders of images
+    #     for temporary_image_folder in temporary_image_folders:
+    #         print(f'\nGenerating labels for: {temporary_image_folder}')
+    #         # Create labels for the images in temp folder
+    #         dataset = base_model.label(input_folder=temporary_image_folder,
+    #                                    extension="."+args.file_ext,
+    #                                    output_folder=auto_labeled_dir,
+    #                                    sahi=args.use_sahi)
+            
+    #         # print('729 dataset_classes: ', dataset.classes)
+    #         # print(type(dataset))
+            
+    #         # Remap the class_id to unified IDs
+    #         # for _, _, detections in dataset:
+    #         #     if "caption" in detections.data:
+    #         #         print(detections.data.keys())
+    #         #         captions = detections.data["caption"]
+    #         #         detections.class_id = [caption_to_id.get(caption, 0) for caption in captions]
+    #         #     else:
+    #         #         print("WARNING: No captions found in detections")
+
+    #         # print(len(list(dataset.images.keys())))
+    #         # Delete the temporary copies
+    #         # shutil.rmtree(temporary_image_folder)
+
+    #         # Filter the dataset
+    #         # print(len(dataset))
+
+    #         # for _, _, detections in dataset:
+    #         #     detections.class_id = [
+    #         #         caption_to_id.get(ordered_captions[cid], 0)
+    #         #         for cid in detections.class_id
+    #         #     ]
+    #         # print("✅ Collapsed class_id:", detections.class_id)
+
+    #         # for image_name in tqdm(image_names):
+    #         for path, image, annotations in dataset:
+    #             annotations.class_id = [
+    #                 caption_to_id.get(ordered_captions[cid], 0)
+    #                 for cid in annotations.class_id
+    #             ]
+    #             # numpy arrays for this image
+    #             # class_id = annotations.class_id
+    #             # print('752 class_id: ', class_id)
+
+    #             # Filter based on area and confidence (removes large and unconfident)
+    #             if args.detect:
+    #                 annotations = filter_detections(image, annotations, area_thresh=args.area_thresh, conf_thresh=args.conf_thresh)
+
+    #             # Filter based on NMS (removes all the duplicates, faster than with_nms)
+    #             predictions = np.column_stack((annotations.xyxy, annotations.confidence))
+    #             indices = non_max_suppression(predictions, args.nms_thresh)
+                
+    #             mask = [i in indices for i in range(len(annotations))]
+
+    #             if len(indices) > 0:
+    #                 # annotations = annotations[indices]
+    #                 annotations = filter_detections_by_indices(annotations, indices)
+
+    #                 # annotations = annotations
+    #                 # annotations.class_id = np.zeros_like(class_id)
+    #                 # print('765 annotation_class: ', annotations.class_id)
+    #             else:
+    #                 annotations = None
+                    
+    #         # Change the dataset classes
+    #         if len(set(dataset.classes)) == 1:
+    #             dataset.classes = [f'{dataset_name}']
+    #         # print('773 dataset.classes: ', dataset.classes)
+
+    #         for _, _, detections in dataset:
+    #             if hasattr(detections, "data") and "caption" in detections.data:
+    #                 captions = detections.data["caption"]
+    #                 detections.class_id = [caption_to_id.get(caption, 0) for caption in captions]
+    #         # print('782 dataset.classes: ', dataset.classes)
+
+    #         if SAVE_LABELS:
+    #             # Save the filtered dataset (this is used for training)
+    #             dataset.as_yolo(current_data_dir + "/images",
+    #                             current_data_dir + "/annotations",
+    #                             min_image_area_percentage=0.01,
+    #                             data_yaml_path=current_data_dir + "/data.yaml")
+
+    #         # Display the filtered dataset
+    #         render_dataset(dataset,
+    #                        rendered_data_dir,
+    #                     #    class_map=class_name_to_id,
+    #                        class_map=caption_to_id,
+    #                        include_boxes=include_boxes,
+    #                        include_masks=include_masks,
+    #                        col_map=cmap)
+
+    #     if SAVE_LABELS:
+    #         # Split the filtered dataset into training / valid
+    #         if args.detect:
+    #             helpers.split_data(current_data_dir, record_confidence=True, file_extension=args.file_ext)
+    #         else:
+    #             helpers.split_data(current_data_dir, record_confidence=False, file_extension=args.file_ext)
+
+    #         # -----------------------------------------
+    #         # Manually delete any images as needed!
+    #         # -----------------------------------------
+    #         if args.response_required:
+    #             response = input("Delete any bad labeled frames from {} now...".format(current_data_dir))
+    #         # Remove images and labels from train/valid if they were deleted from rendered
+    #         remove_bad_data(current_data_dir, args.file_ext)
+
+    # print("Done.")

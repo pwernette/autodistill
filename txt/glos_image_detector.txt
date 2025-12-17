@@ -1,0 +1,334 @@
+import os, argparse, re
+from ultralytics import YOLO
+from glob import glob
+import cv2
+
+from sahi.utils.yolov8 import (
+    download_yolov8x_model, download_yolov8x_seg_model
+)
+
+from sahi import AutoDetectionModel
+from sahi.utils.cv import read_image
+from sahi.utils.file import download_from_url
+from sahi.predict import get_prediction, get_sliced_prediction, predict
+# from sahi_derived.yolov8
+
+def str_to_bool(s):
+    """
+    Converts str ['t','true','f','false'] to boolean, not case sensitive.
+    Checks first if already a boolean.
+    Raises exception if unexpected entry.
+        args:
+            s: str
+        returns:
+            out_boolean: output boolean [True or False]
+    """
+    #check to see if already boolean
+    if isinstance(s, bool):
+        out_boolean = s
+    else:
+        # remove quotes, commas, and case from s
+        sf = s.lower().replace('"', '').replace("'", '').replace(',', '')
+        # True
+        if sf in ['t', 'true']:
+            out_boolean = True
+        # False
+        elif sf in ['f', 'false']:
+            out_boolean = False
+        # Unexpected arg
+        else:
+            # print exception so it will be visible in console, then raise exception
+            print('ArgumentError: Argument invalid. Expected boolean '
+                  + 'got ' + '"' + str(s) + '"' + ' instead')
+            raise Exception('ArgumentError: Argument invalid. Expected boolean '
+                            + 'got ' + '"' + str(s) + '"' + ' instead')
+    return out_boolean
+
+def filter_objects(results_obj, keep_classes=['person','umbrella'], keep_list_type='name', verbose=1):
+    keep_list = []
+    for i,v in enumerate(results_obj.object_prediction_list):
+        if keep_list_type == 'name':
+            if v.category.name in keep_classes:
+                keep_list.append(i)
+        else:
+            if v.category.id in keep_classes:
+                keep_list.append(i)
+    if verbose == 1:
+        print('   keeping {} of {} objects'.format(len(keep_list), len(results_obj.object_prediction_list)))
+    tmp = []
+    [tmp.append(results_obj.object_prediction_list[i]) for i in keep_list]
+    results_obj.object_prediction_list = tmp
+
+'''
+YOLOv8 default class list
+{0: 'person',
+ 1: 'bicycle',
+ 2: 'car',
+ 3: 'motorcycle',
+ 4: 'airplane',
+ 5: 'bus',
+ 6: 'train',
+ 7: 'truck',
+ 8: 'boat',
+ 9: 'traffic light',
+ 10: 'fire hydrant',
+ 11: 'stop sign',
+ 12: 'parking meter',
+ 13: 'bench',
+ 14: 'bird',
+ 15: 'cat',
+ 16: 'dog',
+ 17: 'horse',
+ 18: 'sheep',
+ 19: 'cow',
+ 20: 'elephant',
+ 21: 'bear',
+ 22: 'zebra',
+ 23: 'giraffe',
+ 24: 'backpack',
+ 25: 'umbrella',
+ 26: 'handbag',
+ 27: 'tie',
+ 28: 'suitcase',
+ 29: 'frisbee',
+ 30: 'skis',
+ 31: 'snowboard',
+ 32: 'sports ball',
+ 33: 'kite',
+ 34: 'baseball bat',
+ 35: 'baseball glove',
+ 36: 'skateboard',
+ 37: 'surfboard',
+ 38: 'tennis racket',
+ 39: 'bottle',
+ 40: 'wine glass',
+ 41: 'cup',
+ 42: 'fork',
+ 43: 'knife',
+ 44: 'spoon',
+ 45: 'bowl',
+ 46: 'banana',
+ 47: 'apple',
+ 48: 'sandwich',
+ 49: 'orange',
+ 50: 'broccoli',
+ 51: 'carrot',
+ 52: 'hot dog',
+ 53: 'pizza',
+ 54: 'donut',
+ 55: 'cake',
+ 56: 'chair',
+ 57: 'couch',
+ 58: 'potted plant',
+ 59: 'bed',
+ 60: 'dining table',
+ 61: 'toilet',
+ 62: 'tv',
+ 63: 'laptop',
+ 64: 'mouse',
+ 65: 'remote',
+ 66: 'keyboard',
+ 67: 'cell phone',
+ 68: 'microwave',
+ 69: 'oven',
+ 70: 'toaster',
+ 71: 'sink',
+ 72: 'refrigerator',
+ 73: 'book',
+ 74: 'clock',
+ 75: 'vase',
+ 76: 'scissors',
+ 77: 'teddy bear',
+ 78: 'hair drier',
+ 79: 'toothbrush'}
+'''
+
+class model_dat():
+    def __init__(self, arguments_object):
+        self.das = arguments_object
+    
+    def search_dir(self):
+        assert hasattr(self.das,'input_directory'), ValueError('No input directory specified.')
+        assert hasattr(self.das,'extension'), ValueError('No file extension specified.')
+
+        # read images
+        self.images = []
+        images = sorted(glob(self.das.input_directory+"/*."+str(self.das.extension)))
+        self.images += images
+        images = sorted(glob(self.das.input_directory+"/*."+str(self.das.extension).upper()))
+        self.images += images
+
+        print('\nFound {} images in {}'.format(len(self.images), self.das.input_directory))
+
+    def load_model(self):
+        assert hasattr(self.das,'model_name'), ValueError('No model specified.')
+        
+        # self.model = YOLO(self.das.model_name)
+        self.detection_model = AutoDetectionModel.from_pretrained(
+                model_type='yolov8',
+                model_path=self.das.model_name,
+                confidence_threshold=self.das.model_confidence,
+                device="cuda:0", # or 'cpu'
+            )
+        print('\nLoaded model: {}'.format(str(self.das.model_name)))
+
+    def run_model(self):
+        assert hasattr(self,'images'), ValueError('No images object.')
+        assert len(self.images) > 0, ValueError('No images loaded.')
+        assert hasattr(self.das,'extension'), ValueError('No file extension specified.')
+        # assert hasattr(self,'model'), ValueError('No model loaded.')
+        assert hasattr(self.das,'output_directory'), ValueError('No output directory specified.')
+        assert hasattr(self.das,'model_iou'), ValueError('No IoU threshold specified.')
+        assert hasattr(self.das,'model_confidence'), ValueError('No confidence threshold specified.')
+
+        self.output_files = []
+        print('\nApplying model to input images...')
+        for i in self.images:
+            # res = self.model(i, iou=self.das.model_iou, conf=self.das.model_confidence, classes=[0,1,2,16])
+            res = get_sliced_prediction(
+                    i,
+                    self.detection_model,
+                    # slice_height = 128,
+                    # slice_width = 128,
+                    slice_height = 256,
+                    slice_width = 256,
+                    overlap_height_ratio = 0.4,
+                    overlap_width_ratio = 0.4
+                )
+            
+            if self.das.filter:
+                filter_objects(res, keep_classes=self.das.filter_classes)
+
+            # for r in res:
+            #     # boxes = r.boxes
+            #     # masks = r.masks
+            #     # keypoints = r.keypoints
+            #     # probs = r.probs
+            #     # obb = r.obb
+
+            #     outname = os.path.join(self.das.output_directory, re.sub('.'+str(self.das.extension), '_yolov8.'+str(self.das.extension), os.path.split(i)[1]))
+
+            #     # r.show()
+            #     r.plot(labels=False, probs=False)
+            #     r.save(filename=outname)
+
+            #     self.output_files.append(outname)
+
+            res.export_visuals(export_dir=self.das.output_directory, hide_labels=True, file_name=os.path.splitext(os.path.split(i)[1])[0])
+
+    def generate_videos(self):
+        assert hasattr(self,'images'), ValueError('No images object could be found.')
+        assert hasattr(self,'output_files'), ValueError('No output files specified.')
+        assert hasattr(self.das,'output_directory'), ValueError('No output directory specified.')
+
+        # generate video for original images
+        print('\nGenerating video of raw images to:   {}'.format(os.path.join(self.das.input_directory, '_video.avi')))
+        frame = cv2.imread(self.images[0])
+        h,w,_ = frame.shape
+        del(frame)
+
+        vid = cv2.VideoWriter(os.path.join(self.das.input_directory, '_video.avi'), 0, 2, (w,h))
+
+        for i in self.images:
+            vid.write(cv2.imread(i))
+        
+        cv2.destroyAllWindows()
+        vid.release()
+        print('   ...complete!')
+
+        # generate video for annotated images
+        if not os.path.isdir(self.das.output_directory):
+            os.mkdir(self.das.output_directory)
+
+        print('\nGenerating video of annotated images to:\n   {}'.format(os.path.join(self.das.output_directory, '_video.avi')))
+
+        output_images = sorted(glob(self.das.output_directory+"/*.png"))
+        frame = cv2.imread(output_images[0])
+        h,w,_ = frame.shape
+        del(frame)
+
+        vid = cv2.VideoWriter(os.path.join(self.das.output_directory, '_video.avi'), 0, 2, (w,h))
+
+        for i in output_images:
+            vid.write(cv2.imread(i))
+        
+        cv2.destroyAllWindows()
+        vid.release()
+        print('   ...complete!')
+
+def main():
+    psr = argparse.ArgumentParser()
+    psr.add_argument('-i','-d','-in','-dir','-indir',
+                      dest='input_directory',
+                      type=str,
+                      default='M:/My Drive/coastal_cameras/20240717_20240718',
+                      help='Input directory with images')
+    psr.add_argument('-m','-mod','-model',
+                      dest='model_name',
+                      type=str,
+                      default='models/detect/yolov8x.pt',
+                      help='Trained YOLOv8 model')
+    psr.add_argument('-o','-out','-odir',
+                      dest='output_directory',
+                      type=str,
+                      help='Directory to save model results')
+    psr.add_argument('-ext',
+                     dest='extension',
+                     type=str,
+                     default='jpg',
+                     choices=['jpg','jpeg','png','bmp','tif','tiff'],
+                     help='File extension of images [default = jpg]')
+    psr.add_argument('-iou',
+                     dest='model_iou',
+                     type=float,
+                     default=0.8,
+                     help='IoU threshold for model results [default = 0.9] (higher numbers = more allowable overlap between labels)')
+    psr.add_argument('-conf','-confidence',
+                     dest='model_confidence',
+                     type=float,
+                     default=0.5,
+                     help='Confidence threshold for model results [default = 0.1]')
+    psr.add_argument('-filter',
+                     dest='filter',
+                     type=str,
+                     default='True',
+                     choices=['jpg','jpeg','png','bmp','tif','tiff'],
+                     help='Option to filter output objects to certain classes [deafult = True]')
+    psr.add_argument('-classes',
+                     dest='filter_classes',
+                     type=str,
+                     default='person,umbrella',
+                     help='Optional list of class names to retain [default = person,umbrella]')
+    psr.add_argument('-vid','-video',
+                     dest='make_videos',
+                     type=str,
+                     default='true',
+                     choices=['t','true','True','f','false','False'],
+                     help='Make videos of raw and annotated images [default = True]')
+    args = psr.parse_args()
+    
+    args.filter = str_to_bool(args.filter)
+    args.make_videos = str_to_bool(args.make_videos)
+    if args.input_directory and not args.output_directory:
+        args.output_directory = os.path.join(os.path.split(args.input_directory)[0], str(os.path.split(args.input_directory)[1])+'_'+str(os.path.splitext(os.path.split(args.model_name)[1])[0])+'_model')
+    if args.filter_classes:
+        if ',' in str(args.filter_classes):
+            args.filter_classes = list(str(args.filter_classes).split(','))
+        elif ';' in str(args.filter_classes):
+            args.filter_classes = list(str(args.filter_classes).split(';'))
+        else:
+            args.filter_classes = list(str(args.filter_classes).split())
+    
+    print('\nFiles will be written to:\n {}'.format(args.output_directory))
+    if not os.path.isdir(args.output_directory):
+        os.makedirs(args.output_directory)
+    
+    mdat = model_dat(args)
+    mdat.search_dir()
+    mdat.load_model()
+    mdat.run_model()
+    if args.make_videos:
+        mdat.generate_videos()
+
+if __name__ == "__main__":
+    main()

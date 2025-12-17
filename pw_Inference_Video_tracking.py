@@ -8,8 +8,7 @@ python sam3_auto_annotate.py --input_dir /mnt/d/sfm_greeen_2025harvest/GoPRo/202
 python sam3_auto_annotate.py --input_dir /mnt/d/sfm_greeen_2025harvest/GoPRo/20251004/low_3 --task segment --workers 8 --device cuda --min_area_frac 1e-6 --max_area_frac 0.6 --score_thresh 0.2 --dedupe_iou 0.5
 
 '''
-import cv2
-import argparse
+import cv2, sys, argparse
 from ultralytics import YOLO
 from tqdm import tqdm
 import numpy as np
@@ -509,8 +508,25 @@ def process_video(input_path, output_path, model_path, device="cpu", conf_thresh
     print(f"✔ Output saved to: {output_path}")
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="YOLO11 Video Inference with optional instance tracking")
+def get_parser():
+    class CustomFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+        pass
+
+    examples = '''
+Example usage:
+
+python sam3_auto_annotate.py --input_dir /mnt/d/sfm_greeen_2025harvest/20250926_oxley/for_annotation --task detect --workers 24 --device cuda --min_area_frac 1e-6 --max_area_frac 0.4 --score_thresh 0.5 --dedupe_iou 0.3
+python sam3_auto_annotate.py --input_dir /mnt/d/sfm_greeen_2025harvest/20250926_oxley/for_annotation --task segment --workers 24 --device cuda --min_area_frac 1e-6 --max_area_frac 0.4 --score_thresh 0.5 --dedupe_iou 0.3
+
+python sam3_auto_annotate.py --input_dir /mnt/d/sfm_greeen_2025harvest/GoPRo/20251004/low_3 --task detect --workers 8 --device cuda --min_area_frac 1e-6 --max_area_frac 0.6 --score_thresh 0.2 --dedupe_iou 0.5
+python sam3_auto_annotate.py --input_dir /mnt/d/sfm_greeen_2025harvest/GoPRo/20251004/low_3 --task segment --workers 8 --device cuda --min_area_frac 1e-6 --max_area_frac 0.6 --score_thresh 0.2 --dedupe_iou 0.5
+'''
+
+    parser = argparse.ArgumentParser(
+        description="YOLO11 Video Inference with optional instance tracking",
+        formatter_class=CustomFormatter,
+        epilog=examples
+    )
     parser.add_argument("--input", required=True, help="Input video path")
     parser.add_argument("--model", required=True, help="YOLO11 .pt model path")
     parser.add_argument("--output", required=True, help="Output video path")
@@ -520,11 +536,16 @@ def parse_args():
     parser.add_argument("--side-by-side", dest="side_by_side", action="store_true", help="Export side-by-side original+annotated (default: annotated only)")
     parser.add_argument("--nms-iou", type=float, default=0.0, help="IoU threshold for per-frame NMS (0.0 to disable)")
     parser.add_argument("--debug", action="store_true", help="Print debug information per-frame")
-    return parser.parse_args()
+    return parser
 
 
 if __name__ == "__main__":
-    args = parse_args()
+    parser = get_parser()
+    # if run with no arguments, print help
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(0)
+    args = parser.parse_args()
     process_video(
         input_path=args.input,
         output_path=args.output,

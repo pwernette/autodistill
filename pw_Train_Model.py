@@ -78,13 +78,18 @@ if __name__ == '__main__':
     parser.add_argument("-d", "-data_dir", "-datadir", "-dir", "-root", "-rdir",
                         dest="rdir",
                         type=str,
-                        # default="/mnt/e/greeen/CabFranc_original/Training_Data/GrapeMapper_detect_0.4_0.5_0.01_JPG",
-                        default="E:/GrapeFinder/CabFranc_original/Training_Data/GrapeMapper_detect_0.4_0.5_0.01_JPG",
-                        required=True,
+                        # default="/mnt/h/GrapeFinder/CabFranc_original/Training_Data/GrapeMapper_segment_0.4_0.5_0.01_JPG",
+                        # default="E:/GrapeFinder/CabFranc_original/Training_Data/GrapeMapper_detect_0.4_0.5_0.01_JPG",
+                        default="/mnt/d/sfm_greeen_2025harvest/20250926_oxley/for_annotation/Training_Data/GrapeMapper_segment_0.35_0.5_0.01_0.3_JPG",
+                        # default="/mnt/d/sfm_greeen_2025harvest/20250926_oxley/for_annotation_sam3_segment_conf_0.5_dedupe_0.3_minarea_1e-06_maxarea_0.6_20251202"
+                        # default="/mnt/d/sfm_greeen_2025harvest/20250926_oxley/photos_geotagged_2/Training_Data/GrapeMapper_segment_0.5_0.5_0.01_0.3_JPG",
+                        # required=True,
                         help="The root data directory (Data); OCD")
     parser.add_argument("-o", "-out_dir", "-outdir",
                         dest="outdir",
                         type=str,
+                        # default="/mnt/h/GrapeFinder_v2",
+                        default="/mnt/h/GrapeFinder_sam3",
                         help="The output data directory")
     parser.add_argument('-dirs', '-num_dirs', '-ndirs',
                         dest='dirs',
@@ -103,7 +108,7 @@ if __name__ == '__main__':
                         default='cuda',
                         choices=['cpu', 'cuda'],
                         help='Device to use')
-    parser.add_argument('-n', '-num_epochs',
+    parser.add_argument('-e', '-n', '-num_epochs',
                         dest='num_epochs',
                         type=int,
                         default=100,
@@ -117,7 +122,7 @@ if __name__ == '__main__':
                         dest='base_model',
                         type=str,
                         default='yolov11',
-                        choices=['yolov8', 'yolov11'],
+                        choices=['yolov8', 'yolo8', 'y8', 'yolov11', 'yolo11', 'y11'],
                         help='Base model to use')
     parser.add_argument('-opt', '-optimizer',  
                         dest='optimizer',
@@ -125,6 +130,15 @@ if __name__ == '__main__':
                         default='Adam',
                         choices=['auto', 'SGD', 'Adam', 'AdamW', 'NAdam', 'RAdam', 'RMSProp'],
                         help='Optimizer to use')
+    parser.add_argument('-w', '-workers',
+                        dest='workers',
+                        type=int,
+                        default=0,
+                        help='Number of DataLoader worker processes (set 0 to disable multiprocessing)')
+    parser.add_argument('--pin_memory',
+                        dest='pin_memory',
+                        action='store_true',
+                        help='Enable pin_memory in DataLoader (may cause issues on some systems).')
 
     args = parser.parse_args()
 
@@ -174,15 +188,15 @@ if __name__ == '__main__':
 
     # Get weights based on task
     if args.task == 'detect':
-        if args.base_model == 'yolov8':
-            weights = "yolov8n.pt"
+        if '8' in args.base_model:
+            weights = "yolo8n.pt"
         else:
-            weights = "yolov11n.pt"
+            weights = "yolo11n.pt"
     else:
-        if args.base_model == 'yolov8':
-            weights = "yolov8n-seg.pt"
+        if '8' in args.base_model: 
+            weights = "yolo8n-seg.pt"
         else:
-            weights = "yolov11n-seg.pt"
+            weights = "yolo11s-seg.pt"
 
     # Name of the run
     run_name = f"{get_now()}_{weights.split('.')[0]}_{os.path.basename(args.rdir)}"
@@ -191,19 +205,34 @@ if __name__ == '__main__':
     target_model = YOLO(weights)
 
     # Train model w/ parameters
-    results = target_model.train(data=training_yaml,
-                                 cache=False,
-                                 device=device_dict[args.device],
-                                 epochs=args.num_epochs,
-                                 patience=int(args.num_epochs * .3),
-                                 batch=16,
-                                 imgsz=1280,
-                                 project=args.outdir,
-                                 name=run_name,
-                                 optimizer=args.optimizer,
-                                 save=True,
-                                 save_period=1,
-                                 plots=True,
-                                 single_cls=True,
-                                 )
-    
+    try:
+        results = target_model.train(data=training_yaml,
+                                     cache=False,
+                                     device=device_dict[args.device],
+                                     epochs=args.num_epochs,
+                                     patience=int(args.num_epochs * .3),
+                                     batch=8,
+                                     imgsz=1280,
+                                     project=args.outdir,
+                                     name=run_name,
+                                     optimizer=args.optimizer,
+                                     save=True,
+                                     save_period=1,
+                                     plots=True,
+                                     single_cls=True,
+                                     amp=True,
+                                     workers=args.workers,
+                                     )
+    except ConnectionResetError as e:
+        print("ConnectionResetError during training DataLoader pin-memory loop.")
+        print("This often occurs when worker processes crash or when pin_memory is incompatible with your setup.")
+        print("Suggested mitigations: ")
+        print("  - Retry with fewer DataLoader workers (e.g. -w 0)")
+        print("  - Disable pin_memory by omitting --pin_memory")
+        raise
+    except Exception as e:
+        print(f"Training failed: {e}")
+        raise
+
+    # If we reach here training completed
+    print('Training finished. Results:', results)

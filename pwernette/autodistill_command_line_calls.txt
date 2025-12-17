@@ -33,3 +33,79 @@ python pw_Train_Model.py -rdir H:/GrapeFinder/CabFranc_original/Training_Data/Gr
 python pw_Train_Model.py -rdir H:/GrapeFinder/CabFranc_original/Training_Data/GrapeMapper_segment_0.4_0.5_0.01_JPG -base yolov8
 python pw_Train_Model.py -rdir H:/GrapeFinder/CabFranc_original/Training_Data/GrapeMapper_segment_0.45_0.5_0.01_JPG -base yolov8
 python pw_Train_Model.py -rdir H:/GrapeFinder/CabFranc_original/Training_Data/GrapeMapper_segment_0.5_0.5_0.01_JPG -base yolov8
+
+
+python pw_Train_Model.py -rdir /mnt/d/sfm_greeen_2025harvest/20250926_oxley/for_annotation/Training_Data/GrapeMapper_segment_0.35_0.5_0.01_0.3_JPG -base yolov11
+
+
+# Purple Grapes Model
+python pw_Auto_Distill.py -response -detect -nms 0.3 -conf 0.3 -amin 0.001 -amax 0.15
+python pw_Train_Model.py -rdir /mnt/d/sfm_greeen_2025harvest/20250926_oxley/for_annotation/Training_Data/GrapeMapper_detect_0.3_0.3_0.001_0.15_JPG -base yolov11 -task detect -e 200 -w 12 -device cuda --pin_memory
+
+python pw_Inference_Video.py --input /mnt/d/sfm_greeen/gopro_cabfranc_mid/GX010899.MP4 --model /mnt/h/GrapeFinder_v2/2025-11-26_11-58-35_yolo11n_GrapeMapper_detect_0.3_0.3_0.001_0.15_JPG/weights/best.pt --output /mnt/d/sfm_greeen/gopro_cabfranc_mid/GX010899_annotated.mp4 --device cuda
+python pw_Inference_Video_tracking.py --input /mnt/d/sfm_greeen/gopro_cabfranc_mid/GX010899.MP4 --model /mnt/h/GrapeFinder_v2/2025-11-26_11-58-35_yolo11n_GrapeMapper_detect_0.3_0.3_0.001_0.15_JPG/weights/best.pt --output /mnt/d/sfm_greeen/gopro_cabfranc_mid/GX010899_annotated_tracking.mp4 --device cuda --use-tracking
+
+
+# Green Grapes Model
+python pw_Auto_Distill.py -dir /mnt/d/sfm_greeen_2025harvest/GoPro/20251004/GoPro/low_3 -ont "green grapes" -response -detect -nms 0.3 -conf 0.3 -amin 0.001 -amax 0.15 -file_ext png
+python pw_Train_Model.py -rdir mnt/d/sfm_greeen_2025harvest/GoPro/20251004/GoPro/low_3/Training_Data/GrapeMapper_green_detect_0.3_0.3_0.001_0.15_JPG -base yolov11 -task detect -e 200 -w 12 -device cuda --pin_memory
+
+
+
+## ANNOTATION MODE ##
+# This uses YOLOE to automatically segment grapes and generate YOLO-format labels with train/val split:
+python grapefinder_image_ann_train.py \
+    -annotate /mnt/d/sfm_greeen_2025harvest/20250926_oxley/for_annotation \
+    -outdir /mnt/d/sfm_greeen_2025harvest/GrapeFinder_yoloe_yolo11_segmentation \
+	-yoloe_model m \
+    -device cuda \
+	-conf 0.25 \
+    -val_split 0.2 \
+    -iou_thresh 0.5 \
+    -min_area 0.001 \
+    -max_area 0.8
+	
+-annotate: folder containing your raw grape images
+-outdir: where the YOLO dataset will be saved
+-device cuda: use GPU if available
+-conf: confidence threshold
+-val_split: fraction of images reserved for validation (default 0.2)
+-iou_thresh: NMS IoU threshold for filtering overlapping detections
+-min_area / --max_area: area thresholds for objects
+
+This produces:
+	images/ and labels/ folders
+	data.yaml for YOLO11 training
+
+
+
+## TRAINING MODE ##
+# This trains YOLO11 on the dataset generated in Annotation mode
+python grapefinder_image_ann_train.py \
+    --train \
+    --outdir path/to/output_dataset \
+    --epochs 50 \
+    --device cuda \
+    --weights path/to/pretrained_yolo11.pt   # optional, can be omitted to start from scratch
+
+--train: triggers YOLO11 training
+--outdir: same folder as step 1 (data.yaml is read from here)
+--epochs: number of training epochs
+--weights: optional, use a pretrained YOLO11 checkpoint
+
+After training, the best weights are stored in runs/train/grape_yolo11_seg/weights/best.pt.
+
+
+
+## INFERENCE MODE ##
+# This runs sliced inference on a single image or a folder of images using the trained YOLO11 model:
+python grapefinder_image_ann_train.py \
+    --infer path/to/test_image_or_folder \
+    --infer_weights runs/train/grape_yolo11_seg/weights/best.pt \
+    --device cuda
+
+--infer: single image path or folder of images
+--infer_weights: path to YOLO11 weights
+--device: use GPU (cuda) or CPU (cpu)
+
+Each image will run through SAHI sliced inference, and predictions will be printed.
